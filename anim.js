@@ -165,7 +165,8 @@ window.Anim = (() => {
     l.setAttribute('x2', b[0].toFixed(1)); l.setAttribute('y2', b[1].toFixed(1));
   };
 
-  function mount(host, id) {
+  function mount(host, id, opts) {
+    opts = opts || {};
     const fig = FIGS[id] || FIGS.walk;
     const p0 = norm(fig.p0), p1 = norm(Object.assign({}, fig.p0, fig.p1 || {}));
     const phases = fig.phases || STILL;
@@ -207,10 +208,11 @@ window.Anim = (() => {
     const cueB = host.querySelector('.cue b'), cueT = host.querySelector('.cue span');
     const breathBox = host.querySelector('.breath');
 
-    let raf = 0, t0 = performance.now(), cur = -1, alive = true;
+    let raf = 0, t0 = performance.now() + (opts.delay || 0) * 1000, cur = -1, curCyc = -1, alive = true;
     function frame(now) {
       if (!alive) return;
-      const t = ((now - t0) / 1000) % total;
+      const el = (now - t0) / 1000, tt = el < 0 ? 0 : el;   // durante la cuenta atrás se queda en la postura inicial
+      const cyc = Math.floor(tt / total), t = tt % total;
       let k = 0, acc = 0;
       while (k < phases.length - 1 && t >= acc + phases[k].d) acc += phases[k++].d;
       const ph = phases[k], u = Math.min(1, (t - acc) / ph.d);
@@ -235,12 +237,14 @@ window.Anim = (() => {
       if (ph.b === 'flow') v = 0.5 - 0.5 * Math.cos((now - t0) / 1000 * Math.PI / 2.5);
       else { const g = lerp(ringSpan[k][0], ringSpan[k][1], u); v = ph.b === 'in' ? g : 1 - g; }
       ring.style.transform = 'scale(' + (0.5 + 0.5 * v).toFixed(3) + ')';
-      if (k !== cur) {
+      if (k !== cur || (el >= 0 && cyc !== curCyc)) {
         cur = k;
         breathBox.className = 'breath b-' + ph.b;
         ringL.textContent = ph.b === 'in' ? 'COGE' : ph.b === 'out' ? 'SUELTA' : 'RESPIRA';
         cueB.textContent = BREATH[ph.b];
         cueT.textContent = ph.t ? ' · ' + ph.t : '';
+        if (el >= 0) { curCyc = cyc; if (opts.on) opts.on(k, ph, cyc); }
+        if (!alive) return;
       }
       raf = requestAnimationFrame(frame);
     }

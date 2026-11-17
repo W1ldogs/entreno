@@ -3,7 +3,7 @@
   const P = window.PLAN, KEY = 'entreno.v1';
   const app = document.getElementById('app');
   Object.keys(P.exercises).forEach(k => { P.exercises[k].id = k; });
-  const DEF = { sessions: [], adj: {}, settings: { sound: true, vib: true, stretch: 15 }, active: null, warmAt: 0 };
+  const DEF = { sessions: [], adj: {}, settings: { sound: true, vib: true, voice: true, stretch: 15 }, active: null, warmAt: 0 };
 
   /* ---------- estado ---------- */
   let S = load();
@@ -73,6 +73,57 @@
       o.start(t); o.stop(t + 0.25);
     }
   }
+  /* ---------- voz ---------- */
+  const canSpeak = 'speechSynthesis' in window;
+  function say(text) {
+    if (!S.settings.voice || !canSpeak || !text) return;
+    try {
+      speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = 'es-ES'; u.rate = 1.1;
+      const v = speechSynthesis.getVoices().find(x => /^es(-|_)ES/i.test(x.lang)) || speechSynthesis.getVoices().find(x => /^es/i.test(x.lang));
+      if (v) u.voice = v;
+      speechSynthesis.speak(u);
+    } catch (e) { /* sin voz */ }
+  }
+  const hush = () => { try { if (canSpeak) speechSynthesis.cancel(); } catch (e) { /* nada */ } };
+  const vIcon = () => S.settings.voice ? '\u{1F50A}' : '\u{1F507}';
+  const vLabel = () => S.settings.voice ? 'Voz activada. Pulsa para silenciarla' : 'Voz silenciada. Pulsa para activarla';
+  const vBtn = () => `<button class="icon ${S.settings.voice ? '' : 'off'}" data-a="voice" aria-label="${vLabel()}">${vIcon()}</button>`;
+  const SIDES = { remomancuerna: 'switch', birddog: 'alt' };   // switch: una serie por lado · alt: alternando lados
+  let lastSaid = '';
+  function setSpeech(step, withName) {
+    const ex = EX(step.ex), set = ex.sets[step.i], tw = targetW(ex, step.i);
+    return (withName ? ex.name.replace(/\s*\(.*?\)/g, '') + '. ' : '') + setLabel(ex, step.i) + '. ' +
+      (set.secs != null ? set.secs + ' segundos' : set.reps + ' repeticiones' + (tw != null ? ' con ' + String(tw).replace('.', ' coma ') + ' kilos' : '')) + '.';
+  }
+  function announce() {
+    const a = S.active;
+    if (view.name !== 'session' || !a || a.done || view.sub) return;
+    const step = a.steps[a.i];
+    if (a.phase === 'rest') {
+      if (lastSaid !== 'r' + a.i) { lastSaid = 'r' + a.i; say('Descansa. ' + (a.rest.min === a.rest.max ? a.rest.max : a.rest.min + ' a ' + a.rest.max) + ' segundos.'); }
+      return;
+    }
+    if (step.type !== 'set' || view.guide || (T && T.run) || lastSaid === 's' + a.i) return;
+    lastSaid = 's' + a.i; say(setSpeech(step, true));
+  }
+  // guía de la serie: cuenta repeticiones y marca la respiración al ritmo de la figura
+  function onGuide(k, ph, cyc) {
+    const g = view.guide;
+    if (!g || !S.active) return;
+    const step = S.active.steps[S.active.i], ex = EX(step.ex), reps = ex.sets[step.i].reps;
+    const mode = SIDES[ex.id], total = mode ? reps * 2 : reps, rep = cyc + 1;
+    const cue = ph.b === 'in' ? 'coge aire' : ph.b === 'out' ? 'suelta' : '';
+    if (k === 0) {
+      if (rep > total) { view.guide = null; say('Serie completa'); beep(2, 1040); render(true); return; }
+      const num = mode === 'switch' ? ((rep - 1) % reps) + 1 : rep, other = mode === 'switch' && rep > reps;
+      const c = document.getElementById('gcount');
+      if (c) c.textContent = (other ? 'Otro lado · ' : '') + 'Repetición ' + num + ' de ' + (mode === 'alt' ? total : reps);
+      say((other && num === 1 ? 'Cambia de lado. ' : '') + num + '. ' + cue); g.b = ph.b;
+    } else if (ph.b !== g.b) { say(cue); g.b = ph.b; }
+  }
+
   async function keepAwake(on) {
     try {
       if (on && !wake && navigator.wakeLock) { wake = await navigator.wakeLock.request('screen'); wake.addEventListener('release', () => { wake = null; }); }
@@ -104,12 +155,12 @@
   function startDay(dayId) {
     const warmDone = Date.now() - S.warmAt < 3 * 3600 * 1000;
     S.active = { day: dayId, steps: buildSteps(DAY(dayId), !warmDone), i: 0, phase: 'work', logs: [], t0: Date.now() };
-    save(); W = null; ST = null; T = null;
+    save(); W = null; ST = null; T = null; lastSaid = '';
     view = { name: 'session' }; render();
   }
   function advance() {
     const a = S.active, step = a.steps[a.i], next = a.steps[a.i + 1];
-    a.i++; view.sub = null; T = null;
+    a.i++; view.sub = null; view.guide = null; T = null;
     if (a.i >= a.steps.length) a.done = true;
     else if (step.type === 'set' && step.rest && next.type === 'set') {
       a.phase = 'rest'; a.rest = { start: Date.now(), min: step.rest[0], max: step.rest[1] };
@@ -193,7 +244,7 @@
 
   const sessionBar = a => `<header class="bar"><button class="icon" data-a="exit" aria-label="Salir">✕</button>
     <span>${DAY(a.day).name} · paso ${Math.min(a.i + 1, a.steps.length)}/${a.steps.length}</span>
-    <button class="icon warn" data-a="stopask" aria-label="Algo no va bien">⚠</button></header>
+    <span class="bar-r">${vBtn()}<button class="icon warn" data-a="stopask" aria-label="Algo no va bien">⚠</button></span></header>
     <div class="prog"><i style="width:${Math.round(a.i / a.steps.length * 100)}%"></i></div>`;
 
   function vSession() {
@@ -235,6 +286,7 @@
         : `<div><b>${set.reps}</b><span>repeticiones</span></div>${tw != null ? `<div><b>${kg(tw).replace(' kg', '')}</b><span>kg ${ex.unit ? '· ' + ex.unit : ''}</span></div>` : ''}`}</div>
       ${ex.perSide ? `<p class="muted center">${ex.perSide}</p>` : ''}
       <p class="last">${lastTxt}</p>
+      ${view.guide ? '<p class="gcount" id="gcount">Preparado…</p>' : ''}
       <div data-fig="${ex.fig}"></div>
       <p class="resp">${ex.resp}</p>
       ${step.info ? `<p class="callout">${step.info}</p>` : ''}
@@ -246,7 +298,7 @@
       </details></section>
       <footer class="dock">${timed
         ? (running ? `<button class="btn ghost big" data-a="tstop">Parar antes</button>` : `<button class="btn primary big" data-a="tstart">Empezar ${set.secs} s</button>`)
-        : `<button class="btn primary big" data-a="done">Serie hecha</button>`}</footer>`;
+        : `<button class="btn ghost" data-a="${view.guide ? 'gstop' : 'guide'}">${view.guide ? 'Parar guía' : 'Guiarme la serie'}</button><button class="btn primary" data-a="done">Serie hecha</button>`}</footer>`;
   }
 
   function vLog(step) {
@@ -369,7 +421,7 @@
     return `<header class="top"><h1>Más</h1><p class="muted">${P.name} · ${P.period}</p></header>
       <section class="card"><h2>Reglas del entrenador</h2>${P.rules.map(r => `<p><b>${r[0]}.</b> ${r[1]}</p>`).join('')}
         <p class="callout"><b>Señal de parar:</b> ${P.stop}</p></section>
-      <section class="card"><h2>Ajustes</h2>${tog('sound', 'Sonido al acabar el descanso')}${tog('vib', 'Vibración')}
+      <section class="card"><h2>Ajustes</h2>${tog('sound', 'Sonido al acabar el descanso')}${tog('vib', 'Vibración')}${tog('voice', 'Voz: guía la respiración y cuenta repeticiones')}
         <label class="toggle"><span>Segundos por estiramiento</span><select data-set="stretch">${[15, 20, 25, 30].map(n => `<option ${st.stretch === n ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
         <button class="btn ghost" data-a="test">Probar el aviso de fin de descanso</button>
         ${view.test ? `<p class="muted">${view.test}</p>` : '<p class="muted">Suena y vibra igual que al acabar un descanso. Sube el volumen multimedia del móvil.</p>'}</section>
@@ -382,7 +434,7 @@
 
   /* ---------- render ---------- */
   const VIEWS = { home: vHome, manual: vManual, pre: vPre, session: vSession, warm: () => soloBar('Calentamiento') + vWarm(), stretch: () => soloBar('Estiramientos') + vStretch(), hist: vHist, more: vMore };
-  const soloBar = t => `<header class="bar"><button class="icon" data-a="go" data-v="home" aria-label="Volver">←</button><span>${t}</span><span></span></header>`;
+  const soloBar = t => `<header class="bar"><button class="icon" data-a="go" data-v="home" aria-label="Volver">←</button><span>${t}</span><span class="bar-r">${vBtn()}</span></header>`;
 
   function render(keepScroll) {
     clearInterval(ticker); ticker = null;
@@ -390,7 +442,8 @@
     const y = window.scrollY;
     app.innerHTML = VIEWS[view.name]();
     window.scrollTo(0, keepScroll ? y : 0);
-    app.querySelectorAll('[data-fig]').forEach(n => stops.push(window.Anim.mount(n, n.dataset.fig)));
+    app.querySelectorAll('[data-fig]').forEach(n => stops.push(window.Anim.mount(n, n.dataset.fig, view.guide ? { on: onGuide, delay: 3 } : null)));
+    announce();
     const inGym = view.name === 'session' || view.name === 'warm' || view.name === 'stretch';
     keepAwake(inGym);
     if (document.getElementById('wt') && W.run) ticker = setInterval(tickWarm, 250);
@@ -402,31 +455,33 @@
   function tickWarm() {
     const left = (W.endAt - Date.now()) / 1000;
     document.getElementById('wt').textContent = clock(left);
-    if (left <= 0) { W.run = false; W.left = 0; beep(2); render(true); }
+    if (left <= 0) { W.run = false; W.left = 0; beep(2); say('Calentamiento terminado'); render(true); }
   }
   function tickRest() {
     const r = S.active.rest, el = (Date.now() - r.start) / 1000, left = r.max - el;
     const rt = document.getElementById('rt'), rs = document.getElementById('rs'), dial = document.getElementById('dial');
     rt.textContent = left >= 0 ? clock(left) : '+' + clock(-left);
     dial.style.setProperty('--p', Math.min(1, el / r.max));
-    if (el >= r.max) { dial.className = 'dial go'; rs.textContent = '¡A por la siguiente!'; if (!r.b2) { r.b2 = 1; beep(2, 1040); } }
-    else if (el >= r.min && r.min < r.max) { dial.className = 'dial ready'; rs.textContent = 'Si estás recuperado, ya puedes'; if (!r.b1) { r.b1 = 1; beep(1, 660); } }
+    if (el >= r.max) { dial.className = 'dial go'; rs.textContent = '¡A por la siguiente!'; if (!r.b2) { r.b2 = 1; beep(2, 1040); const a = S.active, st = a.steps[a.i]; say('Siguiente. ' + setSpeech(st, a.steps[a.i - 1].ex !== st.ex)); lastSaid = 's' + a.i; } }
+    else if (el >= r.min && r.min < r.max) { dial.className = 'dial ready'; rs.textContent = 'Si estás recuperado, ya puedes'; if (!r.b1) { r.b1 = 1; beep(1, 660); say('Si estás recuperado, ya puedes empezar'); } }
   }
   function tickStretch() {
     const left = (ST.endAt - Date.now()) / 1000;
     document.getElementById('stt').textContent = clock(left);
     if (left > 0) return;
-    if (ST.phase === 'prep') { ST.phase = 'hold'; ST.endAt = Date.now() + S.settings.stretch * 1000; beep(1, 660); render(true); }
-    else { ST.k++; beep(2); if (ST.k < stretchSeq().length) { ST.phase = 'prep'; ST.endAt = Date.now() + 5000; } else ST.phase = 'idle'; render(); }
+    if (ST.phase === 'prep') { ST.phase = 'hold'; ST.endAt = Date.now() + S.settings.stretch * 1000; beep(1, 660); say('Aguanta y respira'); render(true); }
+    else { ST.k++; beep(2); if (ST.k < stretchSeq().length) { ST.phase = 'prep'; ST.endAt = Date.now() + 5000; sayStretch(); } else { ST.phase = 'idle'; say('Estiramientos terminados'); } render(); }
   }
+  function sayStretch() { const it = stretchSeq()[ST.k]; if (it) say(it.s.name + (it.side ? '. Lado ' + it.side : '')); }
   function tickTimed() {
     const left = (T.endAt - Date.now()) / 1000;
+    if (!T.half && T.total >= 20 && left <= T.total / 2) { T.half = 1; say('Mitad. Sigue respirando'); }
     document.getElementById('tt').textContent = clock(left);
-    if (left <= 0) { beep(2); openLog(T.total); }
+    if (left <= 0) { beep(2); say('Tiempo'); openLog(T.total); }
   }
   function openLog(secs) {
     const step = S.active.steps[S.active.i], ex = EX(step.ex), set = ex.sets[step.i], tw = targetW(ex, step.i);
-    T = null; view.sub = 'log';
+    T = null; view.guide = null; view.sub = 'log';
     view.log = set.secs != null ? { secs: secs != null ? secs : set.secs } : { reps: set.reps, w: tw };
     if (view.log.w == null) delete view.log.w;
     render();
@@ -443,7 +498,7 @@
     },
     resume: () => { view = { name: 'session' }; render(); },
     discard: () => { if (confirm('¿Descartar el entreno en curso? Se pierden las series que llevabas apuntadas.')) { S.active = null; save(); render(); } },
-    exit: () => { view = { name: 'home' }; render(); },
+    exit: () => { hush(); view = { name: 'home' }; render(); },
     warm: () => { W = null; view = { name: 'warm' }; render(); },
     stretch: () => { ST = null; view = { name: 'stretch' }; render(); },
     wtoggle: () => {
@@ -456,7 +511,7 @@
       if (view.name === 'session') advance(); else { view = { name: 'home' }; render(); }
     },
     done: () => openLog(),
-    tstart: () => { const set = EX(S.active.steps[S.active.i].ex).sets[S.active.steps[S.active.i].i]; T = { run: true, total: set.secs, endAt: Date.now() + set.secs * 1000 }; render(true); },
+    tstart: () => { const set = EX(S.active.steps[S.active.i].ex).sets[S.active.steps[S.active.i].i]; T = { run: true, total: set.secs, endAt: Date.now() + set.secs * 1000 }; say('Empieza. Respira con normalidad, sin aguantar el aire'); render(true); },
     tstop: () => openLog(Math.max(0, Math.round(T.total - (T.endAt - Date.now()) / 1000))),
     adj: d => {
       const step = S.active.steps[S.active.i], ex = EX(step.ex), L = view.log, n = +d.d;
@@ -466,6 +521,13 @@
       render(true);
     },
     back: () => { view.sub = null; render(); },
+    voice: () => {
+      S.settings.voice = !S.settings.voice; save();
+      if (S.settings.voice) say('Voz activada'); else hush();
+      document.querySelectorAll('[data-a=voice]').forEach(b => { b.textContent = vIcon(); b.setAttribute('aria-label', vLabel()); b.classList.toggle('off', !S.settings.voice); });
+    },
+    guide: () => { view.guide = { b: '' }; say('Preparado'); render(true); },
+    gstop: () => { view.guide = null; hush(); render(true); },
     savelog: () => {
       const a = S.active, step = a.steps[a.i], ex = EX(step.ex), set = ex.sets[step.i], tw = targetW(ex, step.i), L = view.log;
       const log = { ex: step.ex, i: step.i, at: Date.now(), st: status(L, set, tw) };
@@ -476,12 +538,12 @@
     rplus: () => { const r = S.active.rest; r.max += 15; r.b2 = 0; save(); render(); },
     rskip: () => { S.active.phase = 'work'; save(); render(); },
     stoggle: () => {
-      if (ST.phase === 'idle') { ST.phase = 'prep'; ST.endAt = Date.now() + 5000; }
+      if (ST.phase === 'idle') { ST.phase = 'prep'; ST.endAt = Date.now() + 5000; sayStretch(); }
       else if (ST.phase === 'pause') { ST.phase = ST.was; ST.endAt = Date.now() + ST.left * 1000; }
       else { ST.was = ST.phase; ST.left = Math.max(0, (ST.endAt - Date.now()) / 1000); ST.phase = 'pause'; }
       render(true);
     },
-    sskip: () => { ST.k++; ST.phase = ST.k < stretchSeq().length && ST.phase !== 'idle' ? 'prep' : 'idle'; ST.endAt = Date.now() + 5000; render(); },
+    sskip: () => { ST.k++; ST.phase = ST.k < stretchSeq().length && ST.phase !== 'idle' ? 'prep' : 'idle'; ST.endAt = Date.now() + 5000; if (ST.phase === 'prep') sayStretch(); render(); },
     sdone: () => { ST = null; if (view.name === 'session') advance(); else { view = { name: 'home' }; render(); } },
     stopask: () => { view.sub = 'stop'; render(); },
     stopyes: () => { const a = S.active; a.stopped = true; a.done = true; view.sub = null; save(); render(); },
@@ -495,9 +557,10 @@
       sortSessions(); S.active = null; save(); view = { name: 'home' }; render();
     },
     test: () => {
-      beep(2, 1040);
+      beep(2, 1040); setTimeout(() => say('Así sonará la voz'), 700);
       const st = S.settings;
       view.test = 'Sonido: ' + (!st.sound ? 'desactivado en los ajustes' : actx ? 'enviado (si no lo oyes, sube el volumen multimedia o quita el modo silencio)' : 'este navegador no lo permite') +
+        '. Voz: ' + (!st.voice ? 'desactivada en los ajustes' : canSpeak ? 'enviada' : 'este navegador no la tiene') +
         '. Vibración: ' + (!st.vib ? 'desactivada en los ajustes' : navigator.vibrate ? 'enviada' : 'este móvil no la permite desde una web (pasa en iPhone)') +
         '. Pantalla siempre encendida durante el entreno: ' + (navigator.wakeLock ? 'disponible' : 'no disponible en este navegador') + '.';
       render(true);

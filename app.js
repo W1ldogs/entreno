@@ -331,6 +331,98 @@
       <footer class="dock"><button class="btn ${navigator.share ? 'ghost' : 'primary'}" data-a="rcopy">Copiar</button>${navigator.share ? '<button class="btn primary" data-a="rshare">Compartir</button>' : ''}</footer>`;
   }
 
+  /* ---------- gráficas de progreso ---------- */
+  const CHARTS = {};
+  function niceStep(range) {
+    const raw = range / 3, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+    return [1, 2, 2.5, 5, 10].map(m => m * mag).find(x => x >= raw) || 10 * mag;
+  }
+  function chartData(id) {
+    const ex = EX(id); if (!ex) return null;
+    const fi = ex.sets.length - 1, timed = ex.sets[fi].secs != null;
+    if (ex.sets[fi].w == null && !timed) return null;
+    const pts = S.sessions.map(s => ({ s, l: s.logs.find(l => l.ex === id && l.i === fi) }))
+      .filter(x => x.l && (timed ? x.l.secs != null : x.l.w != null)).slice(-12)
+      .map(({ s, l }) => ({ t: s.date, v: timed ? l.secs : l.w, tv: timed ? l.ts : l.tw, reps: l.reps, st: l.st }));
+    return { id, pts, timed };
+  }
+  const fmtV = (d, v) => v == null ? '–' : d.timed ? v + ' s' : kg(v);
+  const stTxt = st => st === 'low' ? '▼ por debajo' : st === 'up' ? '▲ por encima' : '✓ cumplido';
+  function chartHtml(id) {
+    const d = chartData(id);
+    if (!d || !d.pts.length) return '';
+    if (d.pts.length < 2) return '<p class="muted">La gráfica aparece a partir del segundo entreno con este ejercicio.</p>';
+    const W = 320, H = 150, L = 34, R = 14, T = 18, B = 22, pw = W - L - R, ph = H - T - B;
+    const vals = d.pts.flatMap(p => p.tv != null ? [p.v, p.tv] : [p.v]);
+    const mn = Math.min(...vals), mx = Math.max(...vals), step = niceStep(mx - mn || Math.max(mx * 0.2, 1));
+    const lo = Math.max(0, Math.floor((mn - step * 0.25) / step) * step), hi = Math.ceil((mx + step * 0.25) / step) * step;
+    const t0 = d.pts[0].t, span = d.pts[d.pts.length - 1].t - t0;
+    const X = (p, i) => L + (span > 0 ? (p.t - t0) / span : i / (d.pts.length - 1)) * pw;
+    const Y = v => T + (1 - (v - lo) / (hi - lo)) * ph;
+    const f = n => n.toFixed(1);
+    d.xy = d.pts.map((p, i) => [X(p, i), Y(p.v)]); d.W = W;
+    let g = '';
+    for (let v = lo; v <= hi + 1e-9; v += step) {
+      g += `<line class="c-grid" x1="${L}" x2="${W - R}" y1="${f(Y(v))}" y2="${f(Y(v))}"/><text class="c-ax" x="${L - 6}" y="${f(Y(v) + 3.5)}" text-anchor="end">${num(v)}</text>`;
+    }
+    const xl = [0, d.pts.length - 1]; if (d.pts.length >= 5) xl.splice(1, 0, Math.floor((d.pts.length - 1) / 2));
+    xl.forEach((i, k) => { g += `<text class="c-ax" x="${f(d.xy[i][0])}" y="${H - 5}" text-anchor="${k === 0 ? 'start' : k === xl.length - 1 ? 'end' : 'middle'}">${fdm(d.pts[i].t)}</text>`; });
+    const path = arr => arr.map((q, i) => (i ? 'L' : 'M') + f(q[0]) + ' ' + f(q[1])).join(' ');
+    const tg = d.pts.map((p, i) => p.tv != null ? [d.xy[i][0], Y(p.tv)] : null).filter(Boolean);
+    if (tg.length > 1) g += `<path class="c-target" d="${path(tg)}"/>`;
+    g += `<path class="c-done" d="${path(d.xy)}"/>`;
+    g += `<line class="c-cross" x1="0" x2="0" y1="${T}" y2="${T + ph}" visibility="hidden"/>`;
+    d.pts.forEach((p, i) => {
+      const [x, y] = d.xy[i];
+      g += p.st === 'low' ? `<path class="c-mk low" d="M${f(x - 6)} ${f(y - 4.5)}h12l-6 10z"/>` : `<circle class="c-mk" cx="${f(x)}" cy="${f(y)}" r="4"/>`;
+    });
+    const first = d.pts[0], last = d.pts[d.pts.length - 1], [lx, ly] = d.xy[d.xy.length - 1];
+    g += `<text class="c-end" x="${f(lx)}" y="${f(Math.max(11, ly - 10))}" text-anchor="end">${fmtV(d, last.v)}</text>`;
+    g += `<rect class="c-hit" x="0" y="0" width="${W}" height="${H}"/>`;
+    CHARTS[id] = d;
+    const rows = d.pts.slice().reverse().map(p => `<tr><td>${fdm(p.t)}</td><td>${d.timed ? p.v + ' s' : num(p.v) + ' × ' + p.reps}</td><td>${fmtV(d, p.tv)}</td><td>${stTxt(p.st)}</td></tr>`).join('');
+    const label = `Evolución de ${exShort(id)}: de ${fmtV(d, first.v)} el ${fdm(first.t)} a ${fmtV(d, last.v)} el ${fdm(last.t)}. Usa las flechas para recorrer los entrenos.`;
+    return `<div class="chart" data-chart="${id}">
+      <p class="c-title">${d.timed ? 'Segundos' : 'Peso'} de la última serie</p>
+      <div class="c-legend"><span><i class="k done"></i>Lo que hiciste</span><span><i class="k target"></i>Objetivo del plan (banda)</span>${d.pts.some(p => p.st === 'low') ? '<span><i class="k low">▼</i>Por debajo del plan</span>' : ''}</div>
+      <svg viewBox="0 0 ${W} ${H}" role="img" tabindex="0" aria-label="${esc(label)}">${g}</svg>
+      <p class="c-read" aria-live="polite">Toca la gráfica para ver cada entreno.</p>
+      <details class="c-table"><summary>Ver datos</summary><table><thead><tr><th>Fecha</th><th>Hecho</th><th>Objetivo</th><th>Estado</th></tr></thead><tbody>${rows}</tbody></table></details></div>`;
+  }
+  function initChart(el) {
+    const d = CHARTS[el.dataset.chart]; if (!d || !d.xy) return;
+    const svg = el.querySelector('svg'), cross = el.querySelector('.c-cross'), read = el.querySelector('.c-read'), mks = el.querySelectorAll('.c-mk');
+    let cur = -1;
+    const show = i => {
+      cur = i; const p = d.pts[i], x = d.xy[i][0];
+      cross.setAttribute('x1', x); cross.setAttribute('x2', x); cross.setAttribute('visibility', 'visible');
+      mks.forEach((m, k) => m.classList.toggle('on', k === i));
+      const b = document.createElement('b'); b.textContent = d.timed ? p.v + ' s' : kg(p.v) + ' × ' + p.reps;
+      const t = document.createTextNode(fday(p.t) + (p.tv != null ? ' · objetivo ' + fmtV(d, p.tv) : '') + ' · ' + stTxt(p.st));
+      read.textContent = ''; read.append(b, t);
+    };
+    const hide = () => {
+      cur = -1; cross.setAttribute('visibility', 'hidden'); mks.forEach(m => m.classList.remove('on'));
+      read.textContent = 'Toca la gráfica para ver cada entreno.';
+    };
+    const near = e => {
+      const r = svg.getBoundingClientRect(), vx = (e.clientX - r.left) / r.width * d.W;
+      let best = 0; d.xy.forEach((q, k) => { if (Math.abs(q[0] - vx) < Math.abs(d.xy[best][0] - vx)) best = k; });
+      return best;
+    };
+    svg.addEventListener('pointermove', e => show(near(e)));
+    svg.addEventListener('pointerdown', e => show(near(e)));
+    svg.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse') hide(); });
+    svg.addEventListener('focus', () => show(cur < 0 ? d.pts.length - 1 : cur));
+    svg.addEventListener('blur', hide);
+    svg.addEventListener('keydown', e => {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      e.preventDefault();
+      const base = cur < 0 ? d.pts.length - 1 : cur;
+      show(Math.max(0, Math.min(d.pts.length - 1, base + (e.key === 'ArrowLeft' ? -1 : 1))));
+    });
+  }
+
   /* ---------- vistas ---------- */
   const nav = cur => `<nav class="tabs">${[['home', 'Entreno'], ['hist', 'Histórico'], ['more', 'Más']].map(([v, l]) =>
     `<button data-a="go" data-v="${v}" class="${cur === v ? 'on' : ''}">${l}</button>`).join('')}</nav>`;
@@ -576,7 +668,10 @@
           <button class="icon" data-a="sdel" data-i="${i}" aria-label="Borrar entreno">✕</button></div>
         ${view.editFeel === i ? `<div class="feeledit">${feelPicker(s.feel || (s.feel = newFeel()), s.day)}</div>` : ''}`).join('') +
       '<p class="muted">Cambia la fecha u hora si entrenaste en otro momento.</p></section>';
-    P.days.forEach(d => {
+    const hd = view.hday || 'all';
+    h += `<h2 class="sec">Por ejercicio</h2><div class="opts filt">${[['all', 'Todos']].concat(P.days.map(d => [d.id, d.name])).map(([k, l]) =>
+      `<button class="opt ${hd === k ? 'on' : ''}" data-a="hday" data-d="${k}" aria-pressed="${hd === k}">${l}</button>`).join('')}</div>`;
+    P.days.filter(d => hd === 'all' || d.id === hd).forEach(d => {
       h += `<h2 class="sec">${d.name} · previsto ${d.weekday.toLowerCase()}</h2>`;
       dayEx(d).forEach(id => {
         const ex = EX(id), rows = S.sessions.filter(s => s.logs.some(l => l.ex === id)).slice(-5).reverse();
@@ -584,6 +679,7 @@
         h += `<section class="card"><h3>${ex.name}</h3>
           ${weighted ? `<div class="adjrow"><span>Objetivo serie ${workCount(ex)}: <b>${kg(targetW(ex, ex.sets.length - 1))}</b>${adj(id) ? ' (plan ' + (adj(id) > 0 ? '+' : '') + kg(adj(id)) + ')' : ''}</span>
             <span><button data-a="tune" data-ex="${id}" data-d="-1" aria-label="Bajar objetivo">−</button><button data-a="tune" data-ex="${id}" data-d="1" aria-label="Subir objetivo">+</button></span></div>` : ''}
+          ${chartHtml(id)}
           ${rows.length ? rows.map(s => `<div class="hrow"><b>${dShort(s.date)}</b><p>${s.logs.filter(l => l.ex === id).map(l =>
             `<span class="chip ${l.st}">${setShort(ex, l.i)} ${logText(l)} ${mark(l.st)}</span>`).join('')}${s.feel && s.feel.where && s.feel.where.includes(id) ? '<span class="chip mid">⚠ molestia</span>' : ''}</p></div>`).join('') : '<p class="muted">Sin registros.</p>'}</section>`;
       });
@@ -622,6 +718,7 @@
     window.scrollTo(0, keepScroll ? y : 0);
     app.querySelectorAll('[data-fig]').forEach(n => stops.push(window.Anim.mount(n, n.dataset.fig, view.guide ? { on: onGuide, delay: 3 } : null)));
     announce();
+    app.querySelectorAll('[data-chart]').forEach(initChart);
     const inGym = view.name === 'session' || view.name === 'warm' || view.name === 'stretch';
     keepAwake(inGym);
     if (document.getElementById('wt') && W.run) ticker = setInterval(tickWarm, 250);
@@ -765,6 +862,7 @@
     },
     lock: () => { try { localStorage.removeItem('entreno.key'); } catch (e) { /* nada */ } location.reload(); },
     report: d => { view = { name: 'report', from: d.from || 'home', mode: 'week' }; render(); },
+    hday: d => { view.hday = d.d; render(true); },
     rmode: d => { view.mode = d.m; render(true); },
     rcopy: async () => {
       const t = document.getElementById('rtxt'), b = document.querySelector('[data-a=rcopy]');

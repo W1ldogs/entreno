@@ -154,18 +154,89 @@
   }
   function startDay(dayId) {
     const warmDone = Date.now() - S.warmAt < 3 * 3600 * 1000;
-    S.active = { day: dayId, steps: buildSteps(DAY(dayId), !warmDone), i: 0, phase: 'work', logs: [], t0: Date.now() };
+    S.active = { day: dayId, steps: buildSteps(DAY(dayId), !warmDone), i: 0, phase: 'work', logs: [], feel: newFeel(), t0: Date.now() };
     save(); W = null; ST = null; T = null; lastSaid = '';
     view = { name: 'session' }; render();
   }
   function advance() {
     const a = S.active, step = a.steps[a.i], next = a.steps[a.i + 1];
     a.i++; view.sub = null; view.guide = null; T = null;
-    if (a.i >= a.steps.length) a.done = true;
+    if (a.i >= a.steps.length) { a.done = true; say('Entreno terminado. ¿Cómo te has encontrado?'); }
     else if (step.type === 'set' && step.rest && next.type === 'set') {
       a.phase = 'rest'; a.rest = { start: Date.now(), min: step.rest[0], max: step.rest[1] };
     } else a.phase = 'work';
     save(); render();
+  }
+
+  /* ---------- sensaciones ---------- */
+  const ABD = ['Ninguna', 'Leve', 'Tuve que parar'];
+  const ABD_TXT = ['sin molestias', 'molestia leve', 'paró por molestias'];
+  const ABD_CLS = ['ok', 'mid', 'low'];
+  const ENERGY = ['Baja', 'Normal', 'Alta'];
+  const newFeel = () => ({ abd: null, en: null, where: [] });
+  const hasFeel = f => !!f && (f.abd != null || f.en != null);
+  const exShort = id => !EX(id) ? id : EX(id).name.replace(/\s*\(.*?\)/g, '').replace(/,.*$/, '').replace(/ con (mancuernas?|cuerda|barra Z)$/, '');
+  const cap = t => t[0].toUpperCase() + t.slice(1);
+  function feelTarget() {
+    if (view.name === 'manual') return { f: view.feel || (view.feel = newFeel()), day: view.day };
+    if (view.name === 'hist' && view.editFeel != null) { const s = S.sessions[view.editFeel]; return { f: s.feel || (s.feel = newFeel()), day: s.day }; }
+    const a = S.active; return { f: a.feel || (a.feel = newFeel()), day: a.day };
+  }
+  function feelPicker(f, dayId) {
+    const d = DAY(dayId), where = f.where || (f.where = []);
+    const opt = (k, v, l, cls) => `<button class="opt ${f[k] === v ? 'on ' + (cls || '') : ''}" data-a="feel" data-k="${k}" data-v="${v}" aria-pressed="${f[k] === v}">${l}</button>`;
+    return `<p class="lbl">Molestia abdominal</p><div class="opts">${ABD.map((l, v) => opt('abd', v, l, ABD_CLS[v])).join('')}</div>
+      ${f.abd > 0 && d ? `<p class="lbl">¿En qué ejercicio la notaste? (opcional)</p><div class="opts wrap">${dayEx(d).map(id =>
+        `<button class="opt ${where.includes(id) ? 'on mid' : ''}" data-a="feelex" data-ex="${id}" aria-pressed="${where.includes(id)}">${exShort(id)}</button>`).join('')}</div>` : ''}
+      <p class="lbl">Energía</p><div class="opts">${ENERGY.map((l, v) => opt('en', v, l)).join('')}</div>`;
+  }
+  const feelChips = f => !hasFeel(f) ? '' :
+    (f.abd != null ? `<span class="chip ${ABD_CLS[f.abd]}">${cap(ABD_TXT[f.abd])}</span>` : '') +
+    (f.en != null ? `<span class="chip soft">Energía ${ENERGY[f.en].toLowerCase()}</span>` : '') +
+    (f.where && f.where.length ? `<span class="chip soft">en ${f.where.map(exShort).join(', ')}</span>` : '');
+  // ejercicio que se estaba haciendo (en el descanso, el de la serie anterior)
+  function curEx(a) { const st = a.phase === 'rest' ? a.steps[a.i - 1] : a.steps[a.i]; return st && st.type === 'set' ? st.ex : null; }
+  function feelFlag(id, withPrev) {
+    const a = S.active;
+    if (a && a.feel && a.feel.where && a.feel.where.includes(id)) return 'Hoy has apuntado molestia en este ejercicio. Ve con calma, no aguantes el aire y, si sigue, para por hoy con ⚠.';
+    if (!withPrev) return '';
+    const prev = S.sessions.filter(s => DAY(s.day) && dayEx(DAY(s.day)).includes(id)).slice(-2).reverse()
+      .find(s => s.feel && s.feel.where && s.feel.where.includes(id));
+    return prev ? `El ${dShort(prev.date)} notaste molestia en este ejercicio. Ve con calma, no aguantes el aire y, si vuelve, apúntala con ⚠.` : '';
+  }
+  function healthAlert(now) {
+    const stopped = s => s.feel && s.feel.abd != null ? s.feel.abd === 2 : !!s.stopped;
+    const n14 = S.sessions.filter(s => s.date > now - 14 * DAYMS && stopped(s)).length;
+    const last = S.sessions[S.sessions.length - 1];
+    const rated = S.sessions.filter(s => s.feel && s.feel.abd != null).slice(-3);
+    let msg = '';
+    if (n14 >= 2) msg = `Has tenido que parar ${n14} veces en las dos últimas semanas. La pauta del entrenador es que, si se repite, lo consultes con tu médico.`;
+    else if (last && stopped(last)) msg = 'El último entreno lo paraste por molestias. Antes de volver, asegúrate de encontrarte bien: sin dolor abdominal, hinchazón fuerte ni fiebre.';
+    else if (rated.length === 3 && rated.every(s => s.feel.abd >= 1)) msg = 'Has notado molestias en los 3 últimos entrenos. Coméntaselo a tu entrenador.';
+    return msg ? `<section class="card warn"><p class="eyebrow">Ojo</p><p>${msg}</p></section>` : '';
+  }
+  function feelStats() {
+    const ss = S.sessions.filter(s => s.feel && s.feel.abd != null).slice(-12);
+    if (!ss.length) return '';
+    const c = [0, 0, 0], e = [0, 0, 0], hits = {};
+    ss.forEach(s => {
+      c[s.feel.abd]++; if (s.feel.en != null) e[s.feel.en]++;
+      const d = DAY(s.day); if (!d) return;
+      dayEx(d).forEach(id => { const x = hits[id] || (hits[id] = [0, 0]); x[1]++; if ((s.feel.where || []).includes(id)) x[0]++; });
+    });
+    const top = Object.keys(hits).filter(id => hits[id][0]).sort((a, b) => hits[b][0] / hits[b][1] - hits[a][0] / hits[a][1] || hits[b][0] - hits[a][0]);
+    return `<h2 class="sec">Sensaciones</h2><section class="card"><p class="muted">Últimos ${ss.length} entrenos con sensaciones apuntadas</p>
+      <div class="stats">${ABD_TXT.map((t, v) => `<div class="${ABD_CLS[v]}"><b>${c[v]}</b><span>${t}</span></div>`).join('')}</div>
+      ${top.length ? '<p class="lbl">Ejercicios donde notaste molestia</p>' + top.map(id =>
+        `<div class="wk-row"><b class="grow">${exShort(id)}</b><span>${hits[id][0]} de ${hits[id][1]} ${hits[id][1] === 1 ? 'vez' : 'veces'}</span></div>`).join('') : ''}
+      ${e.some(Boolean) ? `<p class="muted">Energía: ${ENERGY.map((l, v) => l.toLowerCase() + ' ' + e[v]).join(' · ')}</p>` : ''}</section>`;
+  }
+  function keepForm() {
+    keepNote();
+    const sdt = document.getElementById('sdt'); if (sdt && S.active) S.active.sdt = sdt.value;
+    const mdt = document.getElementById('mdt'), mf = document.getElementById('mfull');
+    if (mdt) view.mdt = mdt.value;
+    if (mf) view.mfull = mf.checked;
   }
 
   /* ---------- vistas ---------- */
@@ -197,9 +268,10 @@
 
     let h = `<header class="top"><p class="eyebrow">${new Date(now).toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' })}</p>
       <h1>${title}</h1>${sub ? `<p class="muted">${sub}</p>` : ''}</header>
+      ${healthAlert(now)}
       <section class="card week"><div class="wk-head"><h2>Esta semana</h2><span class="pill ${nDone === P.days.length ? '' : 'soft'}">${nDone} de ${P.days.length}</span></div>
       <div class="wk-strip">${cells}</div>
-      ${P.days.map(d => { const s = doneBy(d.id); return `<div class="wk-row ${s ? 'ok' : ''}"><b>${s ? '✓' : '○'} ${d.name}</b><span>${s ? 'Hecho el ' + dWhen(s.date) : 'Pendiente · previsto el ' + d.weekday.toLowerCase()}</span></div>`; }).join('')}
+      ${P.days.map(d => { const s = doneBy(d.id); return `<div class="wk-row ${s ? 'ok' : ''}"><b>${s ? '✓' : '○'} ${d.name}</b><span>${s ? 'Hecho el ' + dWhen(s.date) + (s.feel && s.feel.abd != null ? ' · ' + ABD_TXT[s.feel.abd] : '') : 'Pendiente · previsto el ' + d.weekday.toLowerCase()}</span></div>`; }).join('')}
       </section>`;
     if (S.active) {
       const a = S.active, d = DAY(a.day);
@@ -226,9 +298,10 @@
     const d = DAY(view.day), nowIn = toInput(Date.now());
     return soloBar(d.name + ' · apuntar') + `<section class="card"><h2>Ya lo hice</h2>
       <p class="muted">Apunta cuándo hiciste el ${d.name}, aunque no fuera su día previsto (${d.weekday.toLowerCase()}).</p>
-      <label class="lbl" for="mdt">Fecha y hora de inicio</label><input type="datetime-local" id="mdt" value="${nowIn}" max="${nowIn}">
-      <label class="toggle"><span>Hice todas las series con los pesos del plan</span><input type="checkbox" id="mfull"></label>
+      <label class="lbl" for="mdt">Fecha y hora de inicio</label><input type="datetime-local" id="mdt" value="${view.mdt || nowIn}" max="${nowIn}">
+      <label class="toggle"><span>Hice todas las series con los pesos del plan</span><input type="checkbox" id="mfull" ${view.mfull ? 'checked' : ''}></label>
       <p class="muted">Si lo marcas, se guardan los pesos del plan como cumplidos y servirán de referencia la próxima vez. Si no, solo cuenta como día hecho.</p>
+      <h3 class="sub">¿Cómo te encontraste? (opcional)</h3>${feelPicker(view.feel || (view.feel = newFeel()), d.id)}
       <button class="btn primary big" data-a="msave" data-day="${d.id}">Guardar</button></section>`;
   }
 
@@ -277,7 +350,7 @@
     let lastTxt = 'Primera vez: empieza con lo que marca el plan.';
     if (last) lastTxt = `Última vez (${dShort(last.at)}): <b>${logText(last)}</b> ${mark(last.st)}` +
       (last.st === 'low' ? ' — te quedaste por debajo: si hoy tampoco sale limpio, baja un escalón.' : '');
-    const running = timed && T && T.run;
+    const running = timed && T && T.run, fl = feelFlag(ex.id, step.i === 0);
     return `<section class="stage">
       ${step.group ? `<p class="eyebrow">${step.group}</p>` : ''}
       <h1>${ex.name}</h1>
@@ -286,6 +359,7 @@
         : `<div><b>${set.reps}</b><span>repeticiones</span></div>${tw != null ? `<div><b>${kg(tw).replace(' kg', '')}</b><span>kg ${ex.unit ? '· ' + ex.unit : ''}</span></div>` : ''}`}</div>
       ${ex.perSide ? `<p class="muted center">${ex.perSide}</p>` : ''}
       <p class="last">${lastTxt}</p>
+      ${fl ? `<p class="callout">${fl}</p>` : ''}
       ${view.guide ? '<p class="gcount" id="gcount">Preparado…</p>' : ''}
       <div data-fig="${ex.fig}"></div>
       <p class="resp">${ex.resp}</p>
@@ -350,9 +424,13 @@
   }
 
   function vStop() {
+    const ex = curEx(S.active);
     return `<section class="card warn"><h2>¿Algo no va bien?</h2><p><b>Señal de parar:</b> ${P.stop}</p>
-      <p class="muted">Si solo es presión o molestia leve en un ejercicio, sigue la nota «Ojo» de ese ejercicio (por ejemplo, apoyar las rodillas en la plancha).</p>
-      <button class="btn primary big" data-a="stopyes">Parar por hoy</button><button class="btn ghost" data-a="back">Seguir entrenando</button></section>`;
+      <button class="btn primary big" data-a="stopyes">Parar por hoy</button></section>
+      <section class="card"><h2>¿Solo presión o molestia leve?</h2>
+      <p class="muted">Sigue la nota «Ojo» del ejercicio si la tiene (por ejemplo, apoyar las rodillas en la plancha) y apúntala${ex ? ' en <b>' + exShort(ex) + '</b>' : ''} para tenerla en cuenta.</p>
+      <button class="btn ghost" data-a="feelmild">Apuntar molestia leve y seguir</button>
+      <button class="btn ghost" data-a="back">Seguir sin apuntar</button></section>`;
   }
 
   function suggestions(a) {
@@ -380,11 +458,14 @@
           : `<div class="row"><button class="btn primary" data-a="up" data-ex="${ex.id}" data-n="${s1}">+${kg(s1)}</button>
              <button class="btn ghost" data-a="up" data-ex="${ex.id}" data-n="${s2}">+${kg(s2)}</button></div>`}</section>`;
     });
+    const f = a.feel || (a.feel = newFeel()), need = view.needFeel && f.abd == null;
+    h += `<section class="card ${need ? 'warn' : 'accent'}" id="feelcard"><h2>¿Cómo te has encontrado?</h2>${feelPicker(f, a.day)}
+      ${need ? '<p class="status low">Marca la molestia abdominal, aunque sea «Ninguna».</p>' : ''}</section>`;
     h += '<section class="card"><h2>Resumen</h2>' + dayEx(d).map(id => {
       const ls = a.logs.filter(l => l.ex === id);
       return ls.length ? `<div class="hrow"><b>${EX(id).name}</b><p>${ls.map(l => `<span class="chip ${l.st}">${setShort(EX(id), l.i)} ${logText(l)} ${mark(l.st)}</span>`).join('')}</p></div>` : '';
-    }).join('') + `<label class="lbl" for="sdt">Fecha y hora de inicio</label><input type="datetime-local" id="sdt" value="${toInput(a.t0)}">
-      <label class="lbl" for="note">Nota del día (opcional)</label><textarea id="note" rows="2" placeholder="Cómo te has encontrado, molestias…">${esc(a.note || '')}</textarea></section>
+    }).join('') + `<label class="lbl" for="sdt">Fecha y hora de inicio</label><input type="datetime-local" id="sdt" value="${a.sdt || toInput(a.t0)}">
+      <label class="lbl" for="note">Nota del día (opcional)</label><textarea id="note" rows="2" placeholder="Algo más que quieras recordar…">${esc(a.note || '')}</textarea></section>
       <footer class="dock"><button class="btn primary big" data-a="finish">Guardar y terminar</button></footer>`;
     return h;
   }
@@ -392,11 +473,14 @@
   function vHist() {
     let h = '<header class="top"><h1>Histórico</h1><p class="muted">Últimas sesiones de cada ejercicio. ✓ cumplido · ▼ por debajo · ▲ por encima</p></header>';
     if (!S.sessions.length) h += '<section class="card"><p>Todavía no hay entrenos guardados. Cuando termines el primero, aparecerá aquí.</p></section>';
+    h += feelStats();
     if (S.sessions.length) h += '<h2 class="sec">Entrenos hechos</h2><section class="card">' +
       S.sessions.map((s, i) => ({ s, i })).slice(-10).reverse().map(({ s, i }) =>
-        `<div class="srow"><div><b>${DAY(s.day) ? DAY(s.day).name : s.day}</b>${s.manual ? ' <span class="chip">apuntado a mano</span>' : ''}${s.stopped ? ' <span class="chip low">parado</span>' : ''}
-          <input type="datetime-local" data-sdate="${i}" value="${toInput(s.date)}" aria-label="Fecha y hora del entreno"></div>
-          <button class="icon" data-a="sdel" data-i="${i}" aria-label="Borrar entreno">✕</button></div>`).join('') +
+        `<div class="srow"><div><b>${DAY(s.day) ? DAY(s.day).name : s.day}</b>${s.manual ? ' <span class="chip">apuntado a mano</span>' : ''}${s.stopped && !(s.feel && s.feel.abd != null) ? ' <span class="chip low">parado</span>' : ''}
+          <input type="datetime-local" data-sdate="${i}" value="${toInput(s.date)}" aria-label="Fecha y hora del entreno">
+          <p class="chips">${feelChips(s.feel)}<button class="link" data-a="feeledit" data-i="${i}">${view.editFeel === i ? 'Listo' : hasFeel(s.feel) ? 'Cambiar sensaciones' : '+ Apuntar sensaciones'}</button></p></div>
+          <button class="icon" data-a="sdel" data-i="${i}" aria-label="Borrar entreno">✕</button></div>
+        ${view.editFeel === i ? `<div class="feeledit">${feelPicker(s.feel || (s.feel = newFeel()), s.day)}</div>` : ''}`).join('') +
       '<p class="muted">Cambia la fecha u hora si entrenaste en otro momento.</p></section>';
     P.days.forEach(d => {
       h += `<h2 class="sec">${d.name} · previsto ${d.weekday.toLowerCase()}</h2>`;
@@ -407,7 +491,7 @@
           ${weighted ? `<div class="adjrow"><span>Objetivo serie ${workCount(ex)}: <b>${kg(targetW(ex, ex.sets.length - 1))}</b>${adj(id) ? ' (plan ' + (adj(id) > 0 ? '+' : '') + kg(adj(id)) + ')' : ''}</span>
             <span><button data-a="tune" data-ex="${id}" data-d="-1" aria-label="Bajar objetivo">−</button><button data-a="tune" data-ex="${id}" data-d="1" aria-label="Subir objetivo">+</button></span></div>` : ''}
           ${rows.length ? rows.map(s => `<div class="hrow"><b>${dShort(s.date)}</b><p>${s.logs.filter(l => l.ex === id).map(l =>
-            `<span class="chip ${l.st}">${setShort(ex, l.i)} ${logText(l)} ${mark(l.st)}</span>`).join('')}</p></div>`).join('') : '<p class="muted">Sin registros.</p>'}</section>`;
+            `<span class="chip ${l.st}">${setShort(ex, l.i)} ${logText(l)} ${mark(l.st)}</span>`).join('')}${s.feel && s.feel.where && s.feel.where.includes(id) ? '<span class="chip mid">⚠ molestia</span>' : ''}</p></div>`).join('') : '<p class="muted">Sin registros.</p>'}</section>`;
       });
     });
     const notes = S.sessions.filter(s => s.note || s.stopped).slice(-8).reverse();
@@ -546,14 +630,34 @@
     sskip: () => { ST.k++; ST.phase = ST.k < stretchSeq().length && ST.phase !== 'idle' ? 'prep' : 'idle'; ST.endAt = Date.now() + 5000; if (ST.phase === 'prep') sayStretch(); render(); },
     sdone: () => { ST = null; if (view.name === 'session') advance(); else { view = { name: 'home' }; render(); } },
     stopask: () => { view.sub = 'stop'; render(); },
-    stopyes: () => { const a = S.active; a.stopped = true; a.done = true; view.sub = null; save(); render(); },
-    up: d => { S.adj[d.ex] = adj(d.ex) + +d.n; view.sug[d.ex] = +d.n; keepNote(); save(); render(true); },
+    stopyes: () => {
+      const a = S.active, f = a.feel || (a.feel = newFeel()), ex = curEx(a);
+      a.stopped = true; a.done = true; f.abd = 2; if (ex && !f.where.includes(ex)) f.where.push(ex);
+      view.sub = null; save(); say('Paramos aquí. Apunta cómo te has encontrado.'); render();
+    },
+    feelmild: () => {
+      const a = S.active, f = a.feel || (a.feel = newFeel()), ex = curEx(a);
+      f.abd = Math.max(f.abd || 0, 1); if (ex && !f.where.includes(ex)) f.where.push(ex);
+      view.sub = null; save(); say('Apuntado. Ve con calma y no aguantes el aire.'); render();
+    },
+    feel: d => { keepForm(); const { f } = feelTarget(); f[d.k] = +d.v; if (d.k === 'abd' && +d.v === 0) f.where = []; save(); render(true); },
+    feelex: d => {
+      keepForm(); const { f } = feelTarget(), w = f.where || [];
+      f.where = w.includes(d.ex) ? w.filter(x => x !== d.ex) : w.concat(d.ex); save(); render(true);
+    },
+    feeledit: d => { view.editFeel = view.editFeel === +d.i ? null : +d.i; render(true); },
+    up: d => { S.adj[d.ex] = adj(d.ex) + +d.n; view.sug[d.ex] = +d.n; keepForm(); save(); render(true); },
     tune: d => { const ex = EX(d.ex); S.adj[d.ex] = adj(d.ex) + +d.d * (ex.step >= 2.5 ? 2.5 : 1); save(); render(true); },
     finish: () => {
-      const a = S.active; keepNote();
+      const a = S.active; keepForm();
+      if (!a.feel || a.feel.abd == null) {
+        view.needFeel = true; render();
+        const fc = document.getElementById('feelcard'); if (fc) fc.scrollIntoView({ block: 'center' });
+        return;
+      }
       const sdt = document.getElementById('sdt'), when = sdt && fromInput(sdt.value);
       if (when && Math.abs(when - a.t0) > 60000) { a.logs.forEach(l => { l.at = when; }); a.t0c = when; }
-      S.sessions.push({ date: a.t0c || a.t0, day: a.day, logs: a.logs, note: a.note || '', stopped: !!a.stopped, mins: Math.round((Date.now() - a.t0) / 60000) });
+      S.sessions.push({ date: a.t0c || a.t0, day: a.day, logs: a.logs, feel: a.feel, note: a.note || '', stopped: !!a.stopped, mins: Math.round((Date.now() - a.t0) / 60000) });
       sortSessions(); S.active = null; save(); view = { name: 'home' }; render();
     },
     test: () => {
@@ -566,7 +670,7 @@
       render(true);
     },
     lock: () => { try { localStorage.removeItem('entreno.key'); } catch (e) { /* nada */ } location.reload(); },
-    manual: d => { view = { name: 'manual', day: d.day }; render(); },
+    manual: d => { view = { name: 'manual', day: d.day, feel: newFeel() }; render(); },
     msave: d => {
       const ts = fromInput(document.getElementById('mdt').value);
       if (!ts) { alert('Revisa la fecha: no puede estar vacía ni ser futura.'); return; }
@@ -579,12 +683,12 @@
           logs.push(l);
         });
       });
-      S.sessions.push({ date: ts, day: d.day, logs, note: '', stopped: false, manual: true });
+      S.sessions.push({ date: ts, day: d.day, logs, feel: hasFeel(view.feel) ? view.feel : undefined, note: '', stopped: false, manual: true });
       sortSessions(); save(); view = { name: 'home' }; render();
     },
     sdel: d => {
       const s = S.sessions[+d.i];
-      if (s && confirm('¿Borrar el entreno del ' + dWhen(s.date) + '? No se puede deshacer.')) { S.sessions.splice(+d.i, 1); save(); render(true); }
+      if (s && confirm('¿Borrar el entreno del ' + dWhen(s.date) + '? No se puede deshacer.')) { S.sessions.splice(+d.i, 1); view.editFeel = null; save(); render(true); }
     },
     export: () => {
       const blob = new Blob([JSON.stringify(S, null, 1)], { type: 'application/json' }), a = document.createElement('a');
@@ -605,7 +709,7 @@
     const t = e.target;
     if (t.dataset.sdate != null) {
       const ts = fromInput(t.value), s = S.sessions[+t.dataset.sdate];
-      if (ts && s) { s.date = ts; s.logs.forEach(l => { l.at = ts; }); sortSessions(); save(); }
+      if (ts && s) { s.date = ts; s.logs.forEach(l => { l.at = ts; }); sortSessions(); view.editFeel = null; save(); }
       else alert('Revisa la fecha: no puede estar vacía ni ser futura.');
       render(true);
     }

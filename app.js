@@ -160,12 +160,25 @@
   }
   function advance() {
     const a = S.active, step = a.steps[a.i], next = a.steps[a.i + 1];
-    a.i++; view.sub = null; view.guide = null; T = null;
+    a.i++; view.sub = null; view.guide = null; view.video = null; T = null;
     if (a.i >= a.steps.length) { a.done = true; say('Entreno terminado. ¿Cómo te has encontrado?'); }
     else if (step.type === 'set' && step.rest && next.type === 'set') {
       a.phase = 'rest'; a.rest = { start: Date.now(), min: step.rest[0], max: step.rest[1] };
     } else a.phase = 'work';
     save(); render();
+  }
+
+  /* ---------- vídeo del entrenador ---------- */
+  // Se carga solo al pulsar (ahorra datos y no avisa a YouTube hasta entonces); dominio sin cookies.
+  const ytId = url => { const m = /(?:v=|shorts\/|youtu\.be\/|embed\/)([\w-]{11})/.exec(url || ''); return m ? m[1] : null; };
+  function videoBlock(ex) {
+    const id = ytId(ex.url);
+    if (!id) return `<a class="video" target="_blank" rel="noopener" href="https://www.youtube.com/results?search_query=${encodeURIComponent(ex.video || ex.name)}">▶ Buscar un vídeo en YouTube</a>`;
+    if (view.video !== ex.id) return `<button class="video" data-a="video" data-ex="${ex.id}">▶ Ver el vídeo del entrenador</button>`;
+    return `<div class="vid ${/shorts\//.test(ex.url) ? 'short' : ''}"><iframe src="https://www.youtube-nocookie.com/embed/${id}?autoplay=1&rel=0&playsinline=1"
+        title="Vídeo: ${esc(ex.name)}" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen
+        referrerpolicy="strict-origin-when-cross-origin"></iframe></div>
+      <p class="vid-links"><button class="link" data-a="video" data-ex="">Cerrar vídeo</button> · <a class="link" target="_blank" rel="noopener" href="${ex.url}">Abrir en YouTube</a></p>`;
   }
 
   /* ---------- variantes ---------- */
@@ -580,11 +593,11 @@
       <div data-fig="${ex.fig}"></div>
       <p class="resp">${ex.resp}</p>
       ${step.info ? `<p class="callout">${step.info}</p>` : ''}
-      <details ${last ? '' : 'open'}><summary>Cómo se hace</summary>
+      <details ${last && view.video !== ex.id ? '' : 'open'}><summary>Cómo se hace</summary>
         <ol class="how">${ex.how.map(x => `<li>${x}</li>`).join('')}</ol>
         ${ex.note ? `<p class="callout"><b>Ojo:</b> ${ex.note}</p>` : ''}
         <p class="muted">Músculos: ${ex.muscles}</p>
-        <a class="video" target="_blank" rel="noopener" href="${ex.url || 'https://www.youtube.com/results?search_query=' + encodeURIComponent(ex.video)}">▶ ${ex.url ? 'Ver' : 'Buscar'} el vídeo del entrenador</a>
+        ${videoBlock(ex)}
       </details></section>
       <footer class="dock">${timed
         ? (running ? `<button class="btn ghost big" data-a="tstop">Parar antes</button>` : `<button class="btn primary big" data-a="tstart">Empezar ${set.secs} s</button>`)
@@ -788,7 +801,7 @@
   }
   function openLog(secs) {
     const step = S.active.steps[S.active.i], ex = EX(step.ex), set = ex.sets[step.i], tw = targetW(ex, step.i);
-    T = null; view.guide = null; view.sub = 'log';
+    T = null; view.guide = null; view.video = null; view.sub = 'log';
     view.log = set.secs != null ? { secs: secs != null ? secs : set.secs } : { reps: set.reps, w: tw };
     if (view.log.w == null) delete view.log.w;
     render();
@@ -859,6 +872,7 @@
       a.stopped = true; a.done = true; f.abd = 2; if (ex && !f.where.includes(ex)) f.where.push(ex);
       view.sub = null; save(); say('Paramos aquí. Apunta cómo te has encontrado.'); render();
     },
+    video: d => { view.video = d.ex || null; render(true); },
     var: d => { const a = S.active; a.vars = a.vars || {}; a.vars[d.ex] = d.v || null; save(); lastSaid = ''; render(true); },
     varmild: d => {
       const a = S.active, f = a.feel || (a.feel = newFeel());

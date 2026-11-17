@@ -222,6 +222,8 @@ h3.sub { margin: 22px 0 0; }
 .c-table th, .c-table td { text-align: left; padding: 5px 4px; border-top: 1px solid var(--line); }
 .c-table th { color: var(--muted); font-weight: 600; }
 .opts.filt { margin-bottom: 4px; }
+.opts.var { margin: 2px 0 0; }
+.opts.var + .muted { margin: 6px 0 4px; font-size: .85rem; }
 .lbl { display: block; margin-top: 14px; font-size: .85rem; color: var(--muted); }
 textarea, select { width: 100%; margin-top: 6px; padding: 10px; border-radius: 12px; border: 1px solid var(--line); background: var(--bg); color: var(--text); font: inherit; }
 .toggle { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 48px; border-top: 1px solid var(--line); }

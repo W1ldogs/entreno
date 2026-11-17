@@ -93,7 +93,7 @@
   const SIDES = { remomancuerna: 'switch', birddog: 'alt' };   // switch: una serie por lado · alt: alternando lados
   let lastSaid = '';
   function setSpeech(step, withName) {
-    const ex = EX(step.ex), set = ex.sets[step.i], tw = targetW(ex, step.i);
+    const ex = exV(step.ex), set = ex.sets[step.i], tw = targetW(ex, step.i);
     return (withName ? ex.name.replace(/\s*\(.*?\)/g, '') + '. ' : '') + setLabel(ex, step.i) + '. ' +
       (set.secs != null ? set.secs + ' segundos' : set.reps + ' repeticiones' + (tw != null ? ' con ' + String(tw).replace('.', ' coma ') + ' kilos' : '')) + '.';
   }
@@ -166,6 +166,36 @@
       a.phase = 'rest'; a.rest = { start: Date.now(), min: step.rest[0], max: step.rest[1] };
     } else a.phase = 'work';
     save(); render();
+  }
+
+  /* ---------- variantes ---------- */
+  // Un ejercicio puede tener variantes (plan.js → variants). La elegida vale para el resto de la sesión
+  // y, si no se cambia, la siguiente vez se propone la última que se usó.
+  const VAR = (id, vid) => { const ex = EX(id); return ex && vid && ex.variants ? ex.variants.find(v => v.id === vid) || null : null; };
+  function lastVariant(id) {
+    for (let i = S.sessions.length - 1; i >= 0; i--) { const l = S.sessions[i].logs.find(x => x.ex === id); if (l) return l.v || null; }
+    return null;
+  }
+  function curVar(id) {
+    const ex = EX(id), a = S.active;
+    if (!ex || !ex.variants) return null;
+    return VAR(id, a && a.vars && id in a.vars ? a.vars[id] : lastVariant(id));
+  }
+  function exV(id) {
+    const ex = EX(id), v = curVar(id);
+    return !v ? ex : Object.assign({}, ex, { name: v.name, fig: v.fig || ex.fig, how: v.how || ex.how, resp: v.resp || ex.resp,
+      note: v.note || ex.note, video: v.video || v.name, url: v.url, vv: v });
+  }
+  const varOf = (s, id) => { const l = s.logs.find(x => x.ex === id && x.v); return l ? VAR(id, l.v) : null; };
+  function varPicker(id) {
+    const ex = EX(id), v = curVar(id), a = S.active;
+    if (!ex || !ex.variants) return '';
+    const fromLast = v && !(a && a.vars && id in a.vars);
+    const opts = [{ id: '', short: ex.vlabel || 'normal' }].concat(ex.variants).map(o =>
+      `<button class="opt ${(v ? v.id : '') === o.id ? 'on' : ''}" data-a="var" data-ex="${id}" data-v="${o.id}" aria-pressed="${(v ? v.id : '') === o.id}">${cap(o.short)}</button>`).join('');
+    const hint = v ? (fromLast ? 'La usaste la última vez. ' : '') + `Vuelve a «${ex.vlabel || 'normal'}» cuando te encuentres bien.`
+      : ex.variants.map(o => `Cambia a «${o.short}» ${o.when}.`).join(' ');
+    return `<div class="opts var" role="group" aria-label="Variante">${opts}</div><p class="muted">${hint}</p>`;
   }
 
   /* ---------- sensaciones ---------- */
@@ -262,7 +292,7 @@
       const ls = s.logs.filter(l => l.ex === id && !(hasWarm(ex) && l.i === 0)).sort((a, b) => a.i - b.i);
       if (!ls.length) return;
       const parts = ls.map(l => setTxt(l.w, l.reps, l.secs) + (l.st === 'low' ? `▼ (obj. ${setTxt(l.tw, l.tr, l.ts)})` : l.st === 'up' ? '▲' : ''));
-      lines.push(`• ${exShort(id)}: ${parts.join(' · ')}${ls.some(l => l.st === 'low') ? '' : ' ✓'}`);
+      lines.push(`• ${varOf(s, id) ? varOf(s, id).name : exShort(id)}: ${parts.join(' · ')}${ls.some(l => l.st === 'low') ? '' : ' ✓'}`);
     });
     if (s.note && s.note.trim()) lines.push('Nota: ' + s.note.trim());
     return lines.join('\n');
@@ -343,7 +373,7 @@
     if (ex.sets[fi].w == null && !timed) return null;
     const pts = S.sessions.map(s => ({ s, l: s.logs.find(l => l.ex === id && l.i === fi) }))
       .filter(x => x.l && (timed ? x.l.secs != null : x.l.w != null)).slice(-12)
-      .map(({ s, l }) => ({ t: s.date, v: timed ? l.secs : l.w, tv: timed ? l.ts : l.tw, reps: l.reps, st: l.st }));
+      .map(({ s, l }) => ({ t: s.date, v: timed ? l.secs : l.w, tv: timed ? l.ts : l.tw, reps: l.reps, st: l.st, vr: l.v }));
     return { id, pts, timed };
   }
   const fmtV = (d, v) => v == null ? '–' : d.timed ? v + ' s' : kg(v);
@@ -380,7 +410,7 @@
     g += `<text class="c-end" x="${f(lx)}" y="${f(Math.max(11, ly - 10))}" text-anchor="end">${fmtV(d, last.v)}</text>`;
     g += `<rect class="c-hit" x="0" y="0" width="${W}" height="${H}"/>`;
     CHARTS[id] = d;
-    const rows = d.pts.slice().reverse().map(p => `<tr><td>${fdm(p.t)}</td><td>${d.timed ? p.v + ' s' : num(p.v) + ' × ' + p.reps}</td><td>${fmtV(d, p.tv)}</td><td>${stTxt(p.st)}</td></tr>`).join('');
+    const rows = d.pts.slice().reverse().map(p => `<tr><td>${fdm(p.t)}</td><td>${d.timed ? p.v + ' s' : num(p.v) + ' × ' + p.reps}${VAR(d.id, p.vr) ? ' (' + VAR(d.id, p.vr).short + ')' : ''}</td><td>${fmtV(d, p.tv)}</td><td>${stTxt(p.st)}</td></tr>`).join('');
     const label = `Evolución de ${exShort(id)}: de ${fmtV(d, first.v)} el ${fdm(first.t)} a ${fmtV(d, last.v)} el ${fdm(last.t)}. Usa las flechas para recorrer los entrenos.`;
     return `<div class="chart" data-chart="${id}">
       <p class="c-title">${d.timed ? 'Segundos' : 'Peso'} de la última serie</p>
@@ -398,7 +428,7 @@
       cross.setAttribute('x1', x); cross.setAttribute('x2', x); cross.setAttribute('visibility', 'visible');
       mks.forEach((m, k) => m.classList.toggle('on', k === i));
       const b = document.createElement('b'); b.textContent = d.timed ? p.v + ' s' : kg(p.v) + ' × ' + p.reps;
-      const t = document.createTextNode(fday(p.t) + (p.tv != null ? ' · objetivo ' + fmtV(d, p.tv) : '') + ' · ' + stTxt(p.st));
+      const t = document.createTextNode(fday(p.t) + (VAR(d.id, p.vr) ? ' · ' + VAR(d.id, p.vr).short : '') + (p.tv != null ? ' · objetivo ' + fmtV(d, p.tv) : '') + ' · ' + stTxt(p.st));
       read.textContent = ''; read.append(b, t);
     };
     const hide = () => {
@@ -530,7 +560,7 @@
   }
 
   function vSet(step) {
-    const ex = EX(step.ex), set = ex.sets[step.i], tw = targetW(ex, step.i), last = lastLog(ex.id, step.i);
+    const ex = exV(step.ex), set = ex.sets[step.i], tw = targetW(ex, step.i), last = lastLog(ex.id, step.i);
     const timed = set.secs != null;
     let lastTxt = 'Primera vez: empieza con lo que marca el plan.';
     if (last) lastTxt = `Última vez (${dShort(last.at)}): <b>${logText(last)}</b> ${mark(last.st)}` +
@@ -540,6 +570,7 @@
       ${step.group ? `<p class="eyebrow">${step.group}</p>` : ''}
       <h1>${ex.name}</h1>
       <p class="pill ${hasWarm(ex) && step.i === 0 ? 'soft' : ''}">${setLabel(ex, step.i)}</p>
+      ${varPicker(step.ex)}
       <div class="target">${timed ? `<div><b id="tt">${running ? clock((T.endAt - Date.now()) / 1000) : set.secs}</b><span>${running ? 'aguanta' : 'segundos'}</span></div>`
         : `<div><b>${set.reps}</b><span>repeticiones</span></div>${tw != null ? `<div><b>${kg(tw).replace(' kg', '')}</b><span>kg ${ex.unit ? '· ' + ex.unit : ''}</span></div>` : ''}`}</div>
       ${ex.perSide ? `<p class="muted center">${ex.perSide}</p>` : ''}
@@ -561,7 +592,7 @@
   }
 
   function vLog(step) {
-    const ex = EX(step.ex), set = ex.sets[step.i], tw = targetW(ex, step.i), L = view.log;
+    const ex = exV(step.ex), set = ex.sets[step.i], tw = targetW(ex, step.i), L = view.log;
     const stepper = (k, label, val) => `<div class="stepper"><span>${label}</span><div><button data-a="adj" data-k="${k}" data-d="-1" aria-label="Menos">−</button>
       <b>${val}</b><button data-a="adj" data-k="${k}" data-d="1" aria-label="Más">+</button></div></div>`;
     const st = status(L, set, tw);
@@ -583,7 +614,7 @@
   }
 
   function vRest() {
-    const a = S.active, step = a.steps[a.i], ex = EX(step.ex), set = ex.sets[step.i], tw = targetW(ex, step.i);
+    const a = S.active, step = a.steps[a.i], ex = exV(step.ex), set = ex.sets[step.i], tw = targetW(ex, step.i);
     const prev = a.steps[a.i - 1];
     return `<section class="stage center"><p class="eyebrow">Descanso · ${a.rest.min === a.rest.max ? a.rest.max : a.rest.min + '-' + a.rest.max} segundos</p>
       <div class="dial" id="dial"><div><b id="rt">${clock(a.rest.max)}</b><span id="rs">Respira lento por la nariz</span></div></div>
@@ -609,11 +640,12 @@
   }
 
   function vStop() {
-    const ex = curEx(S.active);
+    const ex = curEx(S.active), alt = ex && EX(ex).variants && !curVar(ex) ? EX(ex).variants[0] : null;
     return `<section class="card warn"><h2>¿Algo no va bien?</h2><p><b>Señal de parar:</b> ${P.stop}</p>
       <button class="btn primary big" data-a="stopyes">Parar por hoy</button></section>
       <section class="card"><h2>¿Solo presión o molestia leve?</h2>
       <p class="muted">Sigue la nota «Ojo» del ejercicio si la tiene (por ejemplo, apoyar las rodillas en la plancha) y apúntala${ex ? ' en <b>' + exShort(ex) + '</b>' : ''} para tenerla en cuenta.</p>
+      ${alt ? `<button class="btn primary" data-a="varmild" data-ex="${ex}" data-v="${alt.id}">Cambiar a «${alt.short}» y seguir</button>` : ''}
       <button class="btn ghost" data-a="feelmild">Apuntar molestia leve y seguir</button>
       <button class="btn ghost" data-a="back">Seguir sin apuntar</button></section>`;
   }
@@ -681,7 +713,7 @@
             <span><button data-a="tune" data-ex="${id}" data-d="-1" aria-label="Bajar objetivo">−</button><button data-a="tune" data-ex="${id}" data-d="1" aria-label="Subir objetivo">+</button></span></div>` : ''}
           ${chartHtml(id)}
           ${rows.length ? rows.map(s => `<div class="hrow"><b>${dShort(s.date)}</b><p>${s.logs.filter(l => l.ex === id).map(l =>
-            `<span class="chip ${l.st}">${setShort(ex, l.i)} ${logText(l)} ${mark(l.st)}</span>`).join('')}${s.feel && s.feel.where && s.feel.where.includes(id) ? '<span class="chip mid">⚠ molestia</span>' : ''}</p></div>`).join('') : '<p class="muted">Sin registros.</p>'}</section>`;
+            `<span class="chip ${l.st}">${setShort(ex, l.i)} ${logText(l)} ${mark(l.st)}</span>`).join('')}${varOf(s, id) ? `<span class="chip soft">${cap(varOf(s, id).short)}</span>` : ''}${s.feel && s.feel.where && s.feel.where.includes(id) ? '<span class="chip mid">⚠ molestia</span>' : ''}</p></div>`).join('') : '<p class="muted">Sin registros.</p>'}</section>`;
       });
     });
     const notes = S.sessions.filter(s => s.note || s.stopped).slice(-8).reverse();
@@ -805,7 +837,8 @@
     gstop: () => { view.guide = null; hush(); render(true); },
     savelog: () => {
       const a = S.active, step = a.steps[a.i], ex = EX(step.ex), set = ex.sets[step.i], tw = targetW(ex, step.i), L = view.log;
-      const log = { ex: step.ex, i: step.i, at: Date.now(), st: status(L, set, tw) };
+      const log = { ex: step.ex, i: step.i, at: Date.now(), st: status(L, set, tw) }, vv = curVar(step.ex);
+      if (vv) log.v = vv.id;
       if (L.secs != null) { log.secs = L.secs; log.ts = set.secs; } else { log.reps = L.reps; log.tr = set.reps; if (tw != null) { log.w = L.w; log.tw = tw; } }
       a.logs.push(log);
       advance();
@@ -825,6 +858,13 @@
       const a = S.active, f = a.feel || (a.feel = newFeel()), ex = curEx(a);
       a.stopped = true; a.done = true; f.abd = 2; if (ex && !f.where.includes(ex)) f.where.push(ex);
       view.sub = null; save(); say('Paramos aquí. Apunta cómo te has encontrado.'); render();
+    },
+    var: d => { const a = S.active; a.vars = a.vars || {}; a.vars[d.ex] = d.v || null; save(); lastSaid = ''; render(true); },
+    varmild: d => {
+      const a = S.active, f = a.feel || (a.feel = newFeel());
+      a.vars = a.vars || {}; a.vars[d.ex] = d.v;
+      f.abd = Math.max(f.abd || 0, 1); if (!f.where.includes(d.ex)) f.where.push(d.ex);
+      view.sub = null; save(); lastSaid = ''; say('Cambiado. Sigue con calma.'); render();
     },
     feelmild: () => {
       const a = S.active, f = a.feel || (a.feel = newFeel()), ex = curEx(a);

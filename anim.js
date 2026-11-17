@@ -86,6 +86,18 @@ window.Anim = (() => {
       att: [{ k: 'cable', j: 'handL', from: [98, 6] }, { k: 'w', j: 'handL', r: 3 }], hot: ['ua'],
       phases: [{ to: 1, d: 1.6, b: 'out', t: 'Estira y abre la cuerda' }, { to: 0, d: 2.2, b: 'in', t: 'Sube despacio, codos pegados' }]
     },
+    plank_knees: {
+      p0: { hip: [82, 116], torso: -14, arm: [90, 0], leg: [148, 180] },
+      p1: {}, hot: ['torso'],
+      phases: [{ to: 0, d: 3, b: 'in', t: 'Por la nariz, sin soltar la postura' }, { to: 0, d: 3.5, b: 'out', t: 'Despacio. Nunca aguantes el aire' }]
+    },
+    legcurl_seated: {
+      p0: { hip: [70, 96], torso: -100, arm: [75, 15], leg: [0, 0] },
+      p1: { leg: [0, 100] },
+      props: [[48, 102, 98, 102], [56, 102, 56, 128], [90, 102, 90, 128], [58, 100, 51, 56]],
+      att: [{ k: 'w', j: 'footL', r: 5 }], hot: ['th'],
+      phases: [{ to: 1, d: 1.6, b: 'out', t: 'Talones abajo y atrás' }, { to: 0, d: 3, b: 'in', t: 'Vuelve en 3 s' }]
+    },
     legcurl: {
       p0: { hip: [70, 92], torso: 0, arm: [60, 0], leg: [180, 175] },
       p1: { leg: [180, 290] },

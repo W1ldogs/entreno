@@ -3,7 +3,7 @@
   const P = window.PLAN, KEY = 'entreno.v1';
   const app = document.getElementById('app');
   Object.keys(P.exercises).forEach(k => { P.exercises[k].id = k; });
-  const DEF = { sessions: [], adj: {}, settings: { sound: true, vib: true, voice: true, stretch: 15 }, active: null, warmAt: 0 };
+  const DEF = { sessions: [], adj: {}, settings: { sound: true, vib: true, voice: true, stretch: 15 }, active: null, warmAt: 0, body: [], backupAt: 0, backupN: 0, backupSnooze: 0 };
 
   /* ---------- estado ---------- */
   let S = load();
@@ -160,6 +160,7 @@
   }
   function advance() {
     const a = S.active, step = a.steps[a.i], next = a.steps[a.i + 1];
+    a.lastAt = Date.now();
     a.i++; view.sub = null; view.guide = null; view.video = null; T = null;
     if (a.i >= a.steps.length) { a.done = true; say('Entreno terminado. ¿Cómo te has encontrado?'); }
     else if (step.type === 'set' && step.rest && next.type === 'set') {
@@ -280,6 +281,9 @@
     const mdt = document.getElementById('mdt'), mf = document.getElementById('mfull');
     if (mdt) view.mdt = mdt.value;
     if (mf) view.mfull = mf.checked;
+    const sm = document.getElementById('smin'), mm = document.getElementById('mmin');
+    if (sm && S.active) S.active.smin = sm.value;
+    if (mm) view.mmin = mm.value;
   }
 
   /* ---------- resumen para el entrenador ---------- */
@@ -297,7 +301,7 @@
   }
   function sessionBlock(s) {
     const d = DAY(s.day);
-    const lines = [`*${d ? d.name : s.day} · ${fday(s.date)}*${s.stopped ? ' (parado)' : ''}${s.manual ? ' (apuntado a mano)' : ''}`];
+    const lines = [`*${d ? d.name : s.day} · ${fday(s.date)}*${s.stopped ? ' (parado)' : ''}${s.manual ? ' (apuntado a mano)' : ''}${s.mins ? ' · ' + s.mins + ' min' : ''}`];
     const fl = feelLine(s.feel); if (fl) lines.push(fl);
     if (!s.logs.length) lines.push('Sin detalle de series.');
     (d ? dayEx(d) : [...new Set(s.logs.map(l => l.ex))]).forEach(id => {
@@ -333,6 +337,7 @@
       const end = addDays(from, 6), same = new Date(from).getMonth() === new Date(end).getMonth();
       L.push(`*Resumen de entreno · semana del ${same ? new Date(from).getDate() : fdm(from)} al ${fdm(end)}*`,
         `Días hechos: ${done.length} de ${P.days.length}${miss.length ? ' · ' + (mode === 'prev' ? 'sin hacer: ' : 'pendiente: ') + miss.map(d => d.name).join(', ') : ''}`);
+      L.push(...extraLines(ss, from, to, false));
       if (!ss.length) return L.concat('', 'No hay entrenos apuntados esta semana.').join('\n');
       L.push('Pesos en kg (peso×repeticiones). ✓ cumplido · ▼ por debajo · ▲ por encima');
       ss.forEach(s => L.push('', sessionBlock(s)));
@@ -345,6 +350,7 @@
           const a = addDays(from, 7 * k), b = addDays(a, 7);
           return new Set(ss.filter(s => s.date >= a && s.date < b).map(s => s.day)).size + '/' + P.days.length;
         }).join(' · '));
+      L.push(...extraLines(ss, from, to, true));
       if (!ss.length) return L.concat('', 'No hay entrenos apuntados en estas semanas.').join('\n');
       const evo = [];
       P.days.forEach(d => dayEx(d).forEach(id => {
@@ -440,8 +446,9 @@
       cur = i; const p = d.pts[i], x = d.xy[i][0];
       cross.setAttribute('x1', x); cross.setAttribute('x2', x); cross.setAttribute('visibility', 'visible');
       mks.forEach((m, k) => m.classList.toggle('on', k === i));
-      const b = document.createElement('b'); b.textContent = d.timed ? p.v + ' s' : kg(p.v) + ' × ' + p.reps;
-      const t = document.createTextNode(fday(p.t) + (VAR(d.id, p.vr) ? ' · ' + VAR(d.id, p.vr).short : '') + (p.tv != null ? ' · objetivo ' + fmtV(d, p.tv) : '') + ' · ' + stTxt(p.st));
+      const rd = d.read ? d.read(p, i) : null;
+      const b = document.createElement('b'); b.textContent = rd ? rd[0] : d.timed ? p.v + ' s' : kg(p.v) + ' × ' + p.reps;
+      const t = document.createTextNode(rd ? rd[1] : fday(p.t) + (VAR(d.id, p.vr) ? ' · ' + VAR(d.id, p.vr).short : '') + (p.tv != null ? ' · objetivo ' + fmtV(d, p.tv) : '') + ' · ' + stTxt(p.st));
       read.textContent = ''; read.append(b, t);
     };
     const hide = () => {
@@ -464,6 +471,163 @@
       const base = cur < 0 ? d.pts.length - 1 : cur;
       show(Math.max(0, Math.min(d.pts.length - 1, base + (e.key === 'ArrowLeft' ? -1 : 1))));
     });
+  }
+
+  /* ---------- duración ---------- */
+  const PLAN_MIN = () => P.minutes || 60;
+  const durOf = a => Math.max(1, Math.round(((a.lastAt || Date.now()) - a.t0) / 60000));
+  const parseMin = v => { const n = parseInt(String(v || '').trim(), 10); return n > 0 && n < 300 ? n : null; };
+  function durAvg(ss) { const m = ss.filter(s => s.mins).map(s => s.mins); return m.length ? Math.round(m.reduce((a, b) => a + b, 0) / m.length) : null; }
+  function durAvgTxt() {
+    const ss = S.sessions.filter(s => s.mins).slice(-6), avg = durAvg(ss);
+    if (!avg) return '';
+    return `Duración media de los últimos ${plural(ss.length, 'entreno', 'entrenos')}: <b>${avg} min</b> (previsto unos ${PLAN_MIN()})${avg > PLAN_MIN() + 15 ? ' · te estás alargando' : ''}. `;
+  }
+
+  /* ---------- peso corporal ---------- */
+  const G = () => P.bodyGoal || null;    // { min, max } en kg por semana
+  const parseKg = v => { const n = parseFloat(String(v || '').trim().replace(',', '.')); return n >= 30 && n <= 250 ? Math.round(n * 10) / 10 : null; };
+  const sgn = n => (n > 0.004 ? '+' : n < -0.004 ? '−' : '±') + num(Math.abs(Math.round(n * 100) / 100));
+  const spanTxt = w => w < 1 ? plural(Math.max(1, Math.round(w * 7)), 'día', 'días') : plural(Math.round(w), 'semana', 'semanas');
+  const pathD = arr => arr.map((q, i) => (i ? 'L' : 'M') + q[0].toFixed(1) + ' ' + q[1].toFixed(1)).join(' ');
+  function bodyGoalAt(t) {
+    const g = G(), b = S.body || [];
+    if (!g || !b.length) return null;
+    const w = (t - b[0].t) / (7 * DAYMS);
+    return [b[0].kg + g.min * w, b[0].kg + g.max * w];
+  }
+  function bodyTrend(list) {
+    const b = list || S.body || [];
+    if (b.length < 2) return null;
+    const a = b[0], z = b[b.length - 1], weeks = (z.t - a.t) / (7 * DAYMS);
+    return { d: z.kg - a.kg, weeks, rate: weeks > 0 ? (z.kg - a.kg) / weeks : 0, from: a, to: z };
+  }
+  function bodyVerdict(tr) {
+    const g = G();
+    if (!g || !tr || tr.weeks < 1) return '';
+    return tr.rate < g.min ? 'por debajo del objetivo' : tr.rate > g.max ? 'por encima del objetivo' : 'dentro del objetivo';
+  }
+  function bodyInput(id) {
+    const b = S.body || [], last = b[b.length - 1];
+    return `<div class="wrow"><input type="text" id="${id}" inputmode="decimal" autocomplete="off" value="${last ? num(last.kg) : ''}" placeholder="73,4" aria-label="Peso en kg">
+      <span>kg</span><button class="btn primary" data-a="bwsave" data-in="${id}">Guardar</button></div>`;
+  }
+  function bodyCard() {
+    if ((S.body || []).some(x => x.t >= weekStart(Date.now()))) return '';
+    return `<section class="card"><p class="eyebrow">Una vez por semana</p><h2>Tu peso de esta semana</h2>
+      <p class="muted">Pésate en ayunas, después de ir al baño y, a ser posible, el mismo día de la semana.</p>${bodyInput('bw')}</section>`;
+  }
+  function bodyChartHtml() {
+    const b = (S.body || []).slice(-16);
+    if (b.length < 2) return b.length ? '<p class="muted">La gráfica aparece a partir del segundo peso apuntado.</p>' : '';
+    const W = 320, H = 150, L = 34, R = 14, T = 18, B = 22, pw = W - L - R, ph = H - T - B, f = n => n.toFixed(1);
+    const pts = b.map(x => ({ t: x.t, v: x.kg, band: bodyGoalAt(x.t) }));
+    const vals = pts.flatMap(p => p.band ? [p.v, p.band[0], p.band[1]] : [p.v]);
+    const mn = Math.min(...vals), mx = Math.max(...vals), step = niceStep(Math.max(mx - mn, 1));
+    const lo = Math.floor((mn - step * 0.25) / step) * step, hi = Math.ceil((mx + step * 0.25) / step) * step;
+    const t0 = pts[0].t, span = (pts[pts.length - 1].t - t0) || 1;
+    const X = t => L + (t - t0) / span * pw, Y = v => T + (1 - (v - lo) / (hi - lo)) * ph;
+    const r1 = n => num(Math.round(n * 10) / 10);
+    const d = { id: 'body', pts, W, xy: pts.map(p => [X(p.t), Y(p.v)]),
+      read: (p, i) => [kg(p.v), fday(p.t) + (i ? ' · ' + sgn(p.v - pts[i - 1].v) + ' kg' : '') + (i && p.band ? ' · ritmo objetivo ' + r1(p.band[0]) + '–' + r1(p.band[1]) + ' kg' : '')] };
+    let g = '';
+    for (let v = lo; v <= hi + 1e-9; v += step) {
+      g += `<line class="c-grid" x1="${L}" x2="${W - R}" y1="${f(Y(v))}" y2="${f(Y(v))}"/><text class="c-ax" x="${L - 6}" y="${f(Y(v) + 3.5)}" text-anchor="end">${num(Math.round(v * 10) / 10)}</text>`;
+    }
+    const xl = [0, pts.length - 1]; if (pts.length >= 5) xl.splice(1, 0, Math.floor((pts.length - 1) / 2));
+    xl.forEach((i, k) => { g += `<text class="c-ax" x="${f(d.xy[i][0])}" y="${H - 5}" text-anchor="${k === 0 ? 'start' : k === xl.length - 1 ? 'end' : 'middle'}">${fdm(pts[i].t)}</text>`; });
+    if (pts[0].band) {
+      const up = pts.map(p => [X(p.t), Y(p.band[1])]), dn = pts.map(p => [X(p.t), Y(p.band[0])]).reverse();
+      g += `<path class="c-band" d="${pathD(up.concat(dn))} Z"/>`;
+    }
+    g += `<path class="c-done" d="${pathD(d.xy)}"/><line class="c-cross" x1="0" x2="0" y1="${T}" y2="${T + ph}" visibility="hidden"/>`;
+    d.xy.forEach(q => { g += `<circle class="c-mk" cx="${f(q[0])}" cy="${f(q[1])}" r="4"/>`; });
+    const [lx, ly] = d.xy[d.xy.length - 1];
+    g += `<text class="c-end" x="${f(lx)}" y="${f(Math.max(11, ly - 10))}" text-anchor="end">${kg(pts[pts.length - 1].v)}</text><rect class="c-hit" x="0" y="0" width="${W}" height="${H}"/>`;
+    CHARTS.body = d;
+    const rows = b.slice().reverse().map((x, k, arr) => `<tr><td>${fdm(x.t)}</td><td>${kg(x.kg)}</td><td>${arr[k + 1] ? sgn(x.kg - arr[k + 1].kg) : '–'}</td>
+      <td><button class="link" data-a="bwdel" data-t="${x.t}" aria-label="Borrar el peso del ${fdm(x.t)}">Borrar</button></td></tr>`).join('');
+    return `<div class="chart" data-chart="body"><p class="c-title">Peso corporal (kg)</p>
+      <div class="c-legend"><span><i class="k done"></i>Tu peso</span>${pts[0].band ? '<span><i class="k band"></i>Ritmo objetivo del entrenador</span>' : ''}</div>
+      <svg viewBox="0 0 ${W} ${H}" role="img" tabindex="0" aria-label="Peso corporal: de ${kg(pts[0].v)} el ${fdm(pts[0].t)} a ${kg(pts[pts.length - 1].v)} el ${fdm(pts[pts.length - 1].t)}.">${g}</svg>
+      <p class="c-read" aria-live="polite">Toca la gráfica para ver cada semana.</p>
+      <details class="c-table"><summary>Ver datos</summary><table><thead><tr><th>Fecha</th><th>Peso</th><th>Cambio</th><th></th></tr></thead><tbody>${rows}</tbody></table></details></div>`;
+  }
+  function bodySection() {
+    const tr = bodyTrend(), g = G(), b = S.body || [];
+    let h = '<h2 class="sec">Peso corporal</h2><section class="card">';
+    if (tr) h += `<p class="bline"><b>${sgn(tr.d)} kg</b> desde el ${fdm(tr.from.t)} (${spanTxt(tr.weeks)})${tr.weeks >= 1 ? ' · ' + sgn(tr.rate) + ' kg/semana' : ''}</p>`;
+    else if (b.length) h += `<p class="bline"><b>${kg(b[0].kg)}</b> el ${fdm(b[0].t)}</p>`;
+    if (g) h += `<p class="muted">Objetivo del entrenador: ganar de ${num(g.min)} a ${num(g.max)} kg por semana${bodyVerdict(tr) ? ' · vas ' + bodyVerdict(tr) : ''}.</p>`;
+    h += bodyChartHtml();
+    return h + `<label class="lbl" for="bwh">Apuntar el peso de esta semana</label>${bodyInput('bwh')}
+      <p class="muted">Si ya lo apuntaste esta semana, se sustituye.</p></section>`;
+  }
+  // líneas extra del resumen para el entrenador: peso y duración
+  function extraLines(ss, from, to, multi) {
+    const out = [], g = G(), b = (S.body || []).filter(x => x.t >= from && x.t < to);
+    if (b.length) {
+      const z = b[b.length - 1], prev = (S.body || []).filter(x => x.t < (multi ? b[0].t : z.t)).pop();
+      if (multi && b.length > 1) {
+        const tr = bodyTrend(b);
+        out.push(`Peso: ${num(b[0].kg)} → ${num(z.kg)} kg (${sgn(tr.d)} kg en ${spanTxt(tr.weeks)}${tr.weeks >= 1 ? ', ' + sgn(tr.rate) + ' kg/semana' : ''}${g ? '; objetivo +' + num(g.min) + ' a +' + num(g.max) + ' kg/semana' : ''})`);
+      } else out.push(`Peso: ${kg(z.kg)}${prev ? ' (' + sgn(z.kg - prev.kg) + ' kg desde el ' + fdm(prev.t) + ')' : ''}`);
+    }
+    const avg = durAvg(ss);
+    if (avg) out.push(`Duración media: ${avg} min (previsto unos ${PLAN_MIN()})`);
+    return out;
+  }
+
+  /* ---------- calendario ---------- */
+  const dayKey = ts => { const d = new Date(ts); return d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate(); };
+  function vCal() {
+    const now = new Date(), cm = view.calM || { y: now.getFullYear(), m: now.getMonth() };
+    const first = new Date(cm.y, cm.m, 1).getTime(), lastDay = new Date(cm.y, cm.m + 1, 0).getTime();
+    const byDay = {}; S.sessions.forEach(s => { (byDay[dayKey(s.date)] = byDay[dayKey(s.date)] || []).push(s); });
+    const worstOf = ss => ss.reduce((m, s) => Math.max(m, s.feel && s.feel.abd != null ? s.feel.abd : s.stopped ? 2 : 0), -1);
+    let grid = 'LMXJVSD'.split('').map(c => `<div class="ch">${c}</div>`).join('') + '<div class="ch">Sem</div>';
+    for (let w = weekStart(first); w <= lastDay; w = addDays(w, 7)) {
+      for (let k = 0; k < 7; k++) {
+        const t = addDays(w, k), d = new Date(t), key = dayKey(t), ss = byDay[key] || [], worst = worstOf(ss);
+        const cls = ['cd', d.getMonth() === cm.m ? '' : 'out', sameDay(t, now) ? 'now' : '', t > now.getTime() ? 'fut' : '', ss.length ? 'done' : '', view.calSel === key ? 'sel' : ''].join(' ');
+        const mk = worst === 2 ? '<i class="m2" aria-hidden="true">▼</i>' : worst === 1 ? '<i class="m1" aria-hidden="true">●</i>' : '';
+        const al = `${d.getDate()} ${fdm(t).split(' ')[1]}: ${ss.map(s => (DAY(s.day) || {}).name || s.day).join(', ')}${worst === 1 ? ', molestia leve' : worst === 2 ? ', paró por molestias' : ''}`;
+        grid += ss.length ? `<button class="${cls}" data-a="calsel" data-k="${key}" aria-label="${al}" aria-pressed="${view.calSel === key}"><b>${d.getDate()}</b>${mk}</button>`
+          : `<div class="${cls}"><b>${d.getDate()}</b></div>`;
+      }
+      const n = new Set(S.sessions.filter(s => s.date >= w && s.date < addDays(w, 7)).map(s => s.day)).size;
+      grid += `<div class="cw ${n >= P.days.length ? 'full' : ''}">${w <= now.getTime() ? n + '/' + P.days.length : ''}</div>`;
+    }
+    const sel = view.calSel && byDay[view.calSel];
+    const detail = sel ? '<div class="cal-det">' + sel.map(s => `<div class="wk-row"><b class="grow">${(DAY(s.day) || {}).name || s.day} · ${fday(s.date)} · ${new Date(s.date).toLocaleTimeString('es-ES', { hour: 'numeric', minute: '2-digit' })}</b><span>${s.mins ? s.mins + ' min' : ''}</span></div>
+      ${hasFeel(s.feel) ? `<p class="chips">${feelChips(s.feel)}</p>` : ''}`).join('') + '</div>' : '';
+    return `<h2 class="sec">Calendario</h2><section class="card">
+      <div class="cal-head"><button class="icon" data-a="calm" data-d="-1" aria-label="Mes anterior">‹</button><h2>${cap(new Date(first).toLocaleDateString('es-ES', { month: 'long', year: 'numeric' }))}</h2><button class="icon" data-a="calm" data-d="1" aria-label="Mes siguiente">›</button></div>
+      <div class="cal">${grid}</div>
+      <p class="cal-leg"><span><i class="sw"></i>Entrenado</span><span><i class="m1">●</i>Molestia leve</span><span><i class="m2">▼</i>Paró por molestias</span><span>2/3 días esa semana</span></p>
+      ${detail}</section>`;
+  }
+
+  /* ---------- copia de seguridad ---------- */
+  let persisted = null;
+  async function askPersist() {
+    try {
+      if (!navigator.storage || !navigator.storage.persist) return;
+      persisted = await navigator.storage.persisted();
+      if (!persisted) persisted = await navigator.storage.persist();
+    } catch (e) { /* no disponible */ }
+  }
+  const dataCount = () => S.sessions.length + (S.body || []).length;
+  function backupDue(now) {
+    if (!S.sessions.length || dataCount() === S.backupN) return false;
+    if (S.backupSnooze && now - S.backupSnooze < 3 * DAYMS) return false;
+    return now - (S.backupAt || S.sessions[0].date) >= (S.backupAt ? 14 : 7) * DAYMS;
+  }
+  function backupCard(now) {
+    if (!backupDue(now)) return '';
+    return `<section class="card accent"><p class="eyebrow">Copia de seguridad</p><h2>Guarda una copia de tu histórico</h2>
+      <p class="muted">${S.backupAt ? 'La última fue el ' + fdm(S.backupAt) + '.' : 'Aún no has hecho ninguna.'} Tus entrenos solo están en este móvil: guárdala en Drive, en tu correo o en un chat contigo mismo.</p>
+      <div class="row"><button class="btn primary" data-a="export">Hacer copia</button><button class="btn ghost" data-a="bksnooze">Ahora no</button></div></section>`;
   }
 
   /* ---------- vistas ---------- */
@@ -501,6 +665,7 @@
       ${P.days.map(d => { const s = doneBy(d.id); return `<div class="wk-row ${s ? 'ok' : ''}"><b>${s ? '✓' : '○'} ${d.name}</b><span>${s ? 'Hecho el ' + dWhen(s.date) + (s.feel && s.feel.abd != null ? ' · ' + ABD_TXT[s.feel.abd] : '') : 'Pendiente · previsto el ' + d.weekday.toLowerCase()}</span></div>`; }).join('')}
       <button class="btn ghost" data-a="report" data-from="home">Resumen para el entrenador</button>
       </section>`;
+    h += backupCard(now);
     if (S.active) {
       const a = S.active, d = DAY(a.day);
       h += `<section class="card accent"><h2>Entreno en curso</h2><p>${d.name} — paso ${Math.min(a.i + 1, a.steps.length)} de ${a.steps.length}</p>
@@ -519,6 +684,7 @@
     });
     h += `<section class="card"><p class="eyebrow">Al terminar</p><h2>Estiramientos</h2><p class="muted">${P.stretches.length} posturas · ${S.settings.stretch} s cada una, sin rebotes</p>
       <button class="btn ghost" data-a="stretch">Hacer estiramientos</button></section>`;
+    h += bodyCard();
     return h + nav('home');
   }
 
@@ -529,6 +695,7 @@
       <label class="lbl" for="mdt">Fecha y hora de inicio</label><input type="datetime-local" id="mdt" value="${view.mdt || nowIn}" max="${nowIn}">
       <label class="toggle"><span>Hice todas las series con los pesos del plan</span><input type="checkbox" id="mfull" ${view.mfull ? 'checked' : ''}></label>
       <p class="muted">Si lo marcas, se guardan los pesos del plan como cumplidos y servirán de referencia la próxima vez. Si no, solo cuenta como día hecho.</p>
+      <label class="lbl" for="mmin">Duración en minutos (opcional)</label><input type="text" class="fld" id="mmin" inputmode="numeric" value="${view.mmin || ''}" placeholder="${PLAN_MIN()}">
       <h3 class="sub">¿Cómo te encontraste? (opcional)</h3>${feelPicker(view.feel || (view.feel = newFeel()), d.id)}
       <button class="btn primary big" data-a="msave" data-day="${d.id}">Guardar</button></section>`;
   }
@@ -679,7 +846,7 @@
     const a = S.active, d = DAY(a.day), sug = view.sug || (view.sug = {});
     const low = a.logs.filter(l => l.st === 'low').length;
     let h = `<header class="top"><p class="eyebrow">${d.name} · ${d.weekday}</p><h1>${a.stopped ? 'Entreno parado' : 'Entreno terminado'}</h1>
-      <p class="muted">${a.logs.length} series registradas${low ? ' · ' + low + ' por debajo del plan' : a.logs.length ? ' · todo cumplido' : ''}</p></header>`;
+      <p class="muted">${a.logs.length} series registradas · ${durOf(a)} min${low ? ' · ' + low + ' por debajo del plan' : a.logs.length ? ' · todo cumplido' : ''}</p></header>`;
     suggestions(a).forEach(ex => {
       const s1 = ex.step, s2 = ex.step === 1 ? 2 : ex.step === 2 ? 4 : ex.step === 2.5 ? 5 : 10;
       h += `<section class="card accent"><p class="eyebrow">Toca subir peso</p><h2>${ex.name}</h2>
@@ -695,6 +862,7 @@
       const ls = a.logs.filter(l => l.ex === id);
       return ls.length ? `<div class="hrow"><b>${EX(id).name}</b><p>${ls.map(l => `<span class="chip ${l.st}">${setShort(EX(id), l.i)} ${logText(l)} ${mark(l.st)}</span>`).join('')}</p></div>` : '';
     }).join('') + `<label class="lbl" for="sdt">Fecha y hora de inicio</label><input type="datetime-local" id="sdt" value="${a.sdt || toInput(a.t0)}">
+      <label class="lbl" for="smin">Duración (minutos)</label><input type="text" class="fld" id="smin" inputmode="numeric" value="${a.smin || durOf(a)}">
       <label class="lbl" for="note">Nota del día (opcional)</label><textarea id="note" rows="2" placeholder="Algo más que quieras recordar…">${esc(a.note || '')}</textarea></section>
       <footer class="dock"><button class="btn primary big" data-a="finish">Guardar y terminar</button></footer>`;
     return h;
@@ -702,17 +870,18 @@
 
   function vHist() {
     let h = '<header class="top"><h1>Histórico</h1><p class="muted">Últimas sesiones de cada ejercicio. ✓ cumplido · ▼ por debajo · ▲ por encima</p></header>';
-    if (S.sessions.length) h += '<button class="btn ghost" data-a="report" data-from="hist">Resumen para el entrenador</button>';
+    if (S.sessions.length) h += '<button class="btn ghost" data-a="report" data-from="hist">Resumen para el entrenador</button>' + vCal();
+    h += bodySection();
     if (!S.sessions.length) h += '<section class="card"><p>Todavía no hay entrenos guardados. Cuando termines el primero, aparecerá aquí.</p></section>';
     h += feelStats();
     if (S.sessions.length) h += '<h2 class="sec">Entrenos hechos</h2><section class="card">' +
       S.sessions.map((s, i) => ({ s, i })).slice(-10).reverse().map(({ s, i }) =>
-        `<div class="srow"><div><b>${DAY(s.day) ? DAY(s.day).name : s.day}</b>${s.manual ? ' <span class="chip">apuntado a mano</span>' : ''}${s.stopped && !(s.feel && s.feel.abd != null) ? ' <span class="chip low">parado</span>' : ''}
+        `<div class="srow"><div><b>${DAY(s.day) ? DAY(s.day).name : s.day}</b>${s.mins ? ` <span class="chip soft">${s.mins} min</span>` : ''}${s.manual ? ' <span class="chip">apuntado a mano</span>' : ''}${s.stopped && !(s.feel && s.feel.abd != null) ? ' <span class="chip low">parado</span>' : ''}
           <input type="datetime-local" data-sdate="${i}" value="${toInput(s.date)}" aria-label="Fecha y hora del entreno">
           <p class="chips">${feelChips(s.feel)}<button class="link" data-a="feeledit" data-i="${i}">${view.editFeel === i ? 'Listo' : hasFeel(s.feel) ? 'Cambiar sensaciones' : '+ Apuntar sensaciones'}</button></p></div>
           <button class="icon" data-a="sdel" data-i="${i}" aria-label="Borrar entreno">✕</button></div>
         ${view.editFeel === i ? `<div class="feeledit">${feelPicker(s.feel || (s.feel = newFeel()), s.day)}</div>` : ''}`).join('') +
-      '<p class="muted">Cambia la fecha u hora si entrenaste en otro momento.</p></section>';
+      '<p class="muted">' + durAvgTxt() + 'Cambia la fecha u hora si entrenaste en otro momento.</p></section>';
     const hd = view.hday || 'all';
     h += `<h2 class="sec">Por ejercicio</h2><div class="opts filt">${[['all', 'Todos']].concat(P.days.map(d => [d.id, d.name])).map(([k, l]) =>
       `<button class="opt ${hd === k ? 'on' : ''}" data-a="hday" data-d="${k}" aria-pressed="${hd === k}">${l}</button>`).join('')}</div>`;
@@ -744,9 +913,12 @@
         <label class="toggle"><span>Segundos por estiramiento</span><select data-set="stretch">${[15, 20, 25, 30].map(n => `<option ${st.stretch === n ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
         <button class="btn ghost" data-a="test">Probar el aviso de fin de descanso</button>
         ${view.test ? `<p class="muted">${view.test}</p>` : '<p class="muted">Suena y vibra igual que al acabar un descanso. Sube el volumen multimedia del móvil.</p>'}</section>
-      <section class="card"><h2>Copia de seguridad</h2><p class="muted">El histórico se guarda solo en este móvil. Exporta una copia de vez en cuando.</p>
-        <div class="row"><button class="btn ghost" data-a="export">Exportar</button><button class="btn ghost" data-a="import">Importar</button></div>
-        <input type="file" id="imp" accept="application/json,.json" hidden></section>
+      <section class="card"><h2>Copia de seguridad</h2><p class="muted">Tu histórico se guarda solo en este móvil. Haz una copia de vez en cuando y guárdala en Drive, en tu correo o en un chat contigo mismo.</p>
+        <p>${S.backupAt ? 'Última copia: <b>' + fdm(S.backupAt) + '</b>' + (dataCount() !== S.backupN ? ' · hay datos nuevos desde entonces' : ' · al día') : 'Aún no has hecho ninguna copia.'}</p>
+        ${persisted === true ? '<p class="muted">✓ El navegador conservará los datos de la app aunque le falte espacio.</p>'
+          : persisted === false ? '<p class="muted">El navegador no garantiza conservar los datos si le falta espacio. Instala la app en la pantalla de inicio y haz copias.</p>' : ''}
+        <div class="row"><button class="btn primary" data-a="export">Hacer copia</button><button class="btn ghost" data-a="import">Recuperar copia</button></div>
+        <input type="file" id="imp" accept="application/json,.json,text/plain,.txt" hidden></section>
       <section class="card"><h2>Acceso</h2><p class="muted">El plan está cifrado con tu contraseña y este dispositivo la recuerda. Si lo bloqueas, se pedirá otra vez al abrir. Tu histórico no se borra.</p>
         <button class="btn ghost" data-a="lock">Bloquear este dispositivo</button></section>` + nav('more');
   }
@@ -869,7 +1041,7 @@
     stopask: () => { view.sub = 'stop'; render(); },
     stopyes: () => {
       const a = S.active, f = a.feel || (a.feel = newFeel()), ex = curEx(a);
-      a.stopped = true; a.done = true; f.abd = 2; if (ex && !f.where.includes(ex)) f.where.push(ex);
+      a.stopped = true; a.done = true; a.lastAt = Date.now(); f.abd = 2; if (ex && !f.where.includes(ex)) f.where.push(ex);
       view.sub = null; save(); say('Paramos aquí. Apunta cómo te has encontrado.'); render();
     },
     video: d => { view.video = d.ex || null; render(true); },
@@ -900,9 +1072,10 @@
         const fc = document.getElementById('feelcard'); if (fc) fc.scrollIntoView({ block: 'center' });
         return;
       }
-      const sdt = document.getElementById('sdt'), when = sdt && fromInput(sdt.value);
+      const sdt = document.getElementById('sdt'), when = sdt && fromInput(sdt.value), sm = parseMin(a.smin);
       if (when && Math.abs(when - a.t0) > 60000) { a.logs.forEach(l => { l.at = when; }); a.t0c = when; }
-      S.sessions.push({ date: a.t0c || a.t0, day: a.day, logs: a.logs, feel: a.feel, note: a.note || '', stopped: !!a.stopped, mins: Math.round((Date.now() - a.t0) / 60000) });
+      S.sessions.push({ date: a.t0c || a.t0, day: a.day, logs: a.logs, feel: a.feel, note: a.note || '', stopped: !!a.stopped, mins: sm || durOf(a) });
+      askPersist();
       sortSessions(); S.active = null; save(); view = { name: 'home' }; render();
     },
     test: () => {
@@ -941,18 +1114,47 @@
           logs.push(l);
         });
       });
-      S.sessions.push({ date: ts, day: d.day, logs, feel: hasFeel(view.feel) ? view.feel : undefined, note: '', stopped: false, manual: true });
+      S.sessions.push({ date: ts, day: d.day, logs, feel: hasFeel(view.feel) ? view.feel : undefined, note: '', stopped: false, manual: true, mins: parseMin((document.getElementById('mmin') || {}).value) || undefined });
       sortSessions(); save(); view = { name: 'home' }; render();
     },
     sdel: d => {
       const s = S.sessions[+d.i];
       if (s && confirm('¿Borrar el entreno del ' + dWhen(s.date) + '? No se puede deshacer.')) { S.sessions.splice(+d.i, 1); view.editFeel = null; save(); render(true); }
     },
-    export: () => {
-      const blob = new Blob([JSON.stringify(S, null, 1)], { type: 'application/json' }), a = document.createElement('a');
-      a.href = URL.createObjectURL(blob); a.download = 'entreno-' + new Date().toISOString().slice(0, 10) + '.json'; a.click();
-      setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    export: async () => {
+      // .txt para que el menú de compartir del móvil lo acepte (Drive, correo, WhatsApp…); dentro va el histórico en JSON
+      const name = 'entreno-copia-' + new Date().toISOString().slice(0, 10) + '.txt';
+      const file = new File([JSON.stringify(S, null, 1)], name, { type: 'text/plain' });
+      let shared = false;
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        try { await navigator.share({ files: [file], title: 'Copia de Mi entreno' }); shared = true; }
+        catch (e) { if (e && e.name === 'AbortError') return; }
+      }
+      if (!shared) {
+        const a = document.createElement('a'); a.href = URL.createObjectURL(file); a.download = name; a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+      }
+      S.backupAt = Date.now(); S.backupN = dataCount(); S.backupSnooze = 0; save(); render(true);
     },
+    bksnooze: () => { S.backupSnooze = Date.now(); save(); render(true); },
+    bwsave: d => {
+      const v = parseKg((document.getElementById(d.in) || {}).value);
+      if (v == null) { alert('Escribe tu peso en kilos, por ejemplo 73,4.'); return; }
+      const now = Date.now(), w0 = weekStart(now);
+      S.body = (S.body || []).filter(x => x.t < w0).concat({ t: now, kg: v });
+      save(); render(true);
+    },
+    bwdel: d => {
+      if (!confirm('¿Borrar el peso del ' + fdm(+d.t) + '?')) return;
+      S.body = (S.body || []).filter(x => x.t !== +d.t); save(); render(true);
+    },
+    calm: d => {
+      const now = new Date(), c = view.calM || { y: now.getFullYear(), m: now.getMonth() };
+      let m = c.m + +d.d, y = c.y;
+      if (m < 0) { m = 11; y--; } else if (m > 11) { m = 0; y++; }
+      view.calM = { y, m }; view.calSel = null; render(true);
+    },
+    calsel: d => { view.calSel = view.calSel === d.k ? null : d.k; render(true); },
     import: () => document.getElementById('imp').click()
   };
   function keepNote() { const n = document.getElementById('note'); if (n && S.active) S.active.note = n.value; }
@@ -985,4 +1187,5 @@
 
   if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
   render();
+  askPersist();
 })();

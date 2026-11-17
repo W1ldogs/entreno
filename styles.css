@@ -259,6 +259,15 @@ button.video { background: none; border: 0; font: inherit; font-weight: 650; col
 .cal-leg span { display: inline-flex; align-items: center; gap: 5px; }
 .cal-leg .sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; background: color-mix(in srgb, var(--accent) 40%, transparent); border: 1px solid var(--accent); }
 .cal-det { margin-top: 8px; }
+.gear { display: flex; align-items: center; gap: 8px; font-size: .92rem; margin: 6px 0 0; }
+.gear .grow { flex: 1; }
+.gear.edit { display: block; margin: 8px 0 4px; }
+.gear.edit .row { margin-top: 8px; }
+.gear-next { font-size: .95rem; margin: 6px 0 0; }
+.opts.eff .opt { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; line-height: 1.15; }
+.opt small { font-size: .74rem; font-weight: 500; opacity: .85; }
+.card.ask { text-align: left; }
+.card.ask p { margin-top: 0; }
 .lbl { display: block; margin-top: 14px; font-size: .85rem; color: var(--muted); }
 textarea, select { width: 100%; margin-top: 6px; padding: 10px; border-radius: 12px; border: 1px solid var(--line); background: var(--bg); color: var(--text); font: inherit; }
 .toggle { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 48px; border-top: 1px solid var(--line); }

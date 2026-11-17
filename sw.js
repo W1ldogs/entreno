@@ -1,6 +1,6 @@
 /* Funciona sin conexión: sirve desde caché y se actualiza en segundo plano.
    Tras publicar cambios, la versión nueva aparece la segunda vez que se abre la app. */
-const CACHE = 'entreno-v3';
+const CACHE = 'entreno-v4';
 const ASSETS = ['./', 'index.html', 'styles.css', 'plan.enc.json', 'boot.js', 'anim.js', 'app.js', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-180.png', 'icons/icon.svg'];
 
@@ -17,5 +17,13 @@ self.addEventListener('fetch', e => {
     const hit = await cache.match(req, { ignoreSearch: true });
     const net = fetch(req).then(res => { if (res.ok) cache.put(req, res.clone()); return res; }).catch(() => hit);
     return hit || net;
+  }));
+});
+// Al tocar el aviso de fin de descanso, vuelve a la app (o la abre si estaba cerrada).
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(cs => {
+    const c = cs.find(x => x.url.startsWith(self.registration.scope));
+    return c ? c.focus() : self.clients.openWindow('./');
   }));
 });

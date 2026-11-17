@@ -3,14 +3,14 @@
   const P = window.PLAN, KEY = 'entreno.v1';
   const app = document.getElementById('app');
   Object.keys(P.exercises).forEach(k => { P.exercises[k].id = k; });
-  const DEF = { sessions: [], adj: {}, settings: { sound: true, vib: true, voice: true, stretch: 15 }, active: null, warmAt: 0, body: [], backupAt: 0, backupN: 0, backupSnooze: 0 };
+  const DEF = { sessions: [], adj: {}, gear: {}, settings: { sound: true, vib: true, voice: true, stretch: 15, notif: null }, active: null, warmAt: 0, body: [], backupAt: 0, backupN: 0, backupSnooze: 0 };
 
   /* ---------- estado ---------- */
   let S = load();
   function load() {
     try {
       const d = JSON.parse(localStorage.getItem(KEY) || '{}');
-      return Object.assign({}, DEF, d, { settings: Object.assign({}, DEF.settings, d.settings || {}) });
+      return Object.assign({}, DEF, d, { settings: Object.assign({}, DEF.settings, d.settings || {}), gear: Object.assign({}, d.gear || {}) });
     } catch (e) { return JSON.parse(JSON.stringify(DEF)); }
   }
   function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { /* sin almacenamiento */ } }
@@ -102,7 +102,7 @@
     if (view.name !== 'session' || !a || a.done || view.sub) return;
     const step = a.steps[a.i];
     if (a.phase === 'rest') {
-      if (lastSaid !== 'r' + a.i) { lastSaid = 'r' + a.i; say('Descansa. ' + (a.rest.min === a.rest.max ? a.rest.max : a.rest.min + ' a ' + a.rest.max) + ' segundos.'); }
+      if (lastSaid !== 'r' + a.i) { lastSaid = 'r' + a.i; say('Descansa. ' + (a.rest.min === a.rest.max ? a.rest.max : a.rest.min + ' a ' + a.rest.max) + ' segundos.' + gearSay(a)); }
       return;
     }
     if (step.type !== 'set' || view.guide || (T && T.run) || lastSaid === 's' + a.i) return;
@@ -131,6 +131,7 @@
     } catch (e) { /* no disponible */ }
   }
   document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') clearNotifs();
     if (document.visibilityState === 'visible' && view.name !== 'home' && view.name !== 'hist' && view.name !== 'more') keepAwake(true);
   });
 
@@ -161,7 +162,7 @@
   function advance() {
     const a = S.active, step = a.steps[a.i], next = a.steps[a.i + 1];
     a.lastAt = Date.now();
-    a.i++; view.sub = null; view.guide = null; view.video = null; T = null;
+    a.i++; view.sub = null; view.guide = null; view.video = null; view.gear = null; T = null;
     if (a.i >= a.steps.length) { a.done = true; say('Entreno terminado. ¿Cómo te has encontrado?'); }
     else if (step.type === 'set' && step.rest && next.type === 'set') {
       a.phase = 'rest'; a.rest = { start: Date.now(), min: step.rest[0], max: step.rest[1] };
@@ -210,6 +211,78 @@
     const hint = v ? (fromLast ? 'La usaste la última vez. ' : '') + `Vuelve a «${ex.vlabel || 'normal'}» cuando te encuentres bien.`
       : ex.variants.map(o => `Cambia a «${o.short}» ${o.when}.`).join(' ');
     return `<div class="opts var" role="group" aria-label="Variante">${opts}</div><p class="muted">${hint}</p>`;
+  }
+
+  /* ---------- ajustes de cada máquina ---------- */
+  // Texto libre por ejercicio y por variante (el curl femoral sentado es otra máquina). Solo se guarda en este móvil.
+  const GEAR_HINT = { legpress: 'respaldo en 3, pies a la anchura de los hombros', pulldown: 'rodillo de las rodillas en 2, agarre ancho',
+    row: 'asiento en 4, agarre en V', legcurl: 'rodillo en 5, respaldo en 2', legcurl_seated: 'respaldo en 3, rodillo en 4',
+    pushdown: 'polea arriba del todo, cuerda', incline: 'banco en el segundo agujero', shoulder: 'respaldo casi vertical' };
+  const gearKey = (id, vid) => id + (vid ? ':' + vid : '');
+  const gearOf = (id, vid) => (S.gear || {})[gearKey(id, vid)] || '';
+  const figOf = (id, vid) => { const v = VAR(id, vid); return (v && v.fig) || EX(id).fig; };
+  const isMachine = (id, vid) => !!GEAR_HINT[figOf(id, vid)];
+  const gearShown = (id, vid) => !!(gearOf(id, vid) || isMachine(id, vid) || view.gear === gearKey(id, vid));
+  function gearLine(id, vid, label) {
+    const ex = EX(id), k = gearKey(id, vid), txt = gearOf(id, vid);
+    if (!ex || !ex.sets.some(x => x.w != null)) return '';
+    if (view.gear === k) return `<div class="gear edit"><label class="lbl" for="gearin">Ajustes de la máquina${label ? ' · ' + esc(label) : ''}</label>
+      <input type="text" class="fld" id="gearin" maxlength="120" enterkeyhint="done" value="${esc(txt)}" placeholder="Ej.: ${GEAR_HINT[figOf(id, vid)] || 'asiento en 4, respaldo en 2, agarre ancho'}">
+      <div class="row"><button class="btn ghost" data-a="gearcancel">Cancelar</button><button class="btn primary" data-a="gearsave" data-k="${k}">Guardar</button></div></div>`;
+    return txt ? `<p class="gear"><span aria-hidden="true">🔧</span><span class="grow">${label ? '<b>' + esc(cap(label)) + ':</b> ' : ''}${esc(txt)}</span><button class="link" data-a="gearedit" data-k="${k}" aria-label="Cambiar los ajustes de la máquina">Cambiar</button></p>`
+      : `<p class="gear"><button class="link" data-a="gearedit" data-k="${k}">+ Apuntar ajustes de la máquina${label ? ' (' + esc(label) + ')' : ''}</button></p>`;
+  }
+  // en el descanso, si el siguiente ejercicio es nuevo hoy, la voz recuerda cómo dejar la máquina
+  function gearSay(a) {
+    const st = a.steps[a.i];
+    if (!st || st.type !== 'set' || a.logs.some(l => l.ex === st.ex)) return '';
+    const ex = exV(st.ex), t = gearOf(st.ex, ex.vv && ex.vv.id);
+    return t ? ' Para ' + exShort(st.ex) + ': ' + t + '.' : '';
+  }
+
+  /* ---------- esfuerzo de la última serie ---------- */
+  // Un toque en la última serie de los ejercicios con peso. «Al límite» frena la propuesta de subir peso.
+  const EFF = ['Cómoda', 'Justa', 'Al límite'];
+  const EFF_SUB = ['sobraban 3 o más', 'sobraban 1 o 2', 'ni una más'];
+  const EFF_TXT = ['cómoda', 'justa', 'al límite'];
+  const isTop = (ex, i) => i === ex.sets.length - 1 && ex.sets[i].w != null;
+  const effChip = l => l.e != null ? `<span class="chip soft">${EFF_TXT[l.e]}</span>` : '';
+
+  /* ---------- aviso fuera de la app ---------- */
+  // Si durante el descanso sales de la app, una notificación avisa de que toca la siguiente serie.
+  // Necesita que el móvil no congele la página en segundo plano: en Android suele ir bien; en iPhone no está garantizado.
+  const canNotify = 'Notification' in window;
+  const notifOn = () => canNotify && S.settings.notif === true && Notification.permission === 'granted';
+  let restAlarm = null;
+  const swReg = async () => { try { return 'serviceWorker' in navigator ? await navigator.serviceWorker.getRegistration() : null; } catch (e) { return null; } };
+  async function notify(title, body, tag) {
+    try {
+      const o = { body, tag: tag || 'rest', renotify: true, icon: 'icons/icon-192.png', vibrate: [250, 120, 250] };
+      const reg = await swReg();
+      if (reg) await reg.showNotification(title, o); else new Notification(title, o);
+    } catch (e) { /* sin notificaciones */ }
+  }
+  async function clearNotifs() {
+    try { const reg = await swReg(); if (reg) (await reg.getNotifications({ tag: 'rest' })).forEach(n => n.close()); } catch (e) { /* nada */ }
+  }
+  function nextTxt(step) {
+    const ex = exV(step.ex), set = ex.sets[step.i], tw = targetW(ex, step.i);
+    return ex.name.replace(/\s*\(.*?\)/g, '') + ' · ' + setLabel(ex, step.i) + ' · ' +
+      (set.secs != null ? set.secs + ' s' : set.reps + ' repeticiones' + (tw != null ? ' × ' + kg(tw) : ''));
+  }
+  const disarmRest = () => { clearTimeout(restAlarm); restAlarm = null; };
+  function armRest() {
+    disarmRest();
+    const a = S.active;
+    if (!notifOn() || !a || a.done || a.phase !== 'rest') return;
+    const ms = a.rest.start + a.rest.max * 1000 - Date.now();
+    if (ms < 0) return;
+    restAlarm = setTimeout(() => {
+      restAlarm = null;
+      const b = S.active;
+      if (!b || b.done || b.phase !== 'rest' || document.visibilityState === 'visible') return;
+      notify('Toca la siguiente serie', nextTxt(b.steps[b.i]));
+    }, ms);
   }
 
   /* ---------- sensaciones ---------- */
@@ -309,7 +382,8 @@
       const ls = s.logs.filter(l => l.ex === id && !(hasWarm(ex) && l.i === 0)).sort((a, b) => a.i - b.i);
       if (!ls.length) return;
       const parts = ls.map(l => setTxt(l.w, l.reps, l.secs) + (l.st === 'low' ? `▼ (obj. ${setTxt(l.tw, l.tr, l.ts)})` : l.st === 'up' ? '▲' : ''));
-      lines.push(`• ${varOf(s, id) ? varOf(s, id).name : exShort(id)}: ${parts.join(' · ')}${ls.some(l => l.st === 'low') ? '' : ' ✓'}`);
+      const top = ls.find(l => l.i === ex.sets.length - 1 && l.e != null);
+      lines.push(`• ${varOf(s, id) ? varOf(s, id).name : exShort(id)}: ${parts.join(' · ')}${ls.some(l => l.st === 'low') ? '' : ' ✓'}${top ? ' · última serie ' + EFF_TXT[top.e] : ''}`);
     });
     if (s.note && s.note.trim()) lines.push('Nota: ' + s.note.trim());
     return lines.join('\n');
@@ -324,6 +398,9 @@
     const low = {}; ss.forEach(s => s.logs.forEach(l => { if (l.st === 'low') low[l.ex] = (low[l.ex] || 0) + 1; }));
     const lows = Object.keys(low).filter(EX);
     if (lows.length) out.push('Por debajo del plan: ' + lows.map(id => `${exShort(id)} (${plural(low[id], 'serie', 'series')})`).join(', '));
+    const hard = {}; ss.forEach(s => s.logs.forEach(l => { if (l.e === 2) hard[l.ex] = (hard[l.ex] || 0) + 1; }));
+    const hk = Object.keys(hard).filter(EX);
+    if (hk.length) out.push('Última serie al límite: ' + hk.map(id => `${exShort(id)} (${plural(hard[id], 'vez', 'veces')})`).join(', '));
     const ups = Object.keys(S.adj).filter(id => S.adj[id] && EX(id));
     if (ups.length) out.push('Pesos ajustados respecto al plan: ' + ups.map(id => `${exShort(id)} ${S.adj[id] > 0 ? '+' : ''}${num(S.adj[id])} kg`).join(', '));
     return out.length ? ['*Para revisar*', ...out.map(x => '• ' + x)] : [];
@@ -357,7 +434,7 @@
         const ex = EX(id), fi = ex.sets.length - 1;
         if (ex.sets[fi].w == null && ex.sets[fi].secs == null) return;
         const ls = ss.map(s => s.logs.find(l => l.ex === id && l.i === fi)).filter(Boolean);
-        if (ls.length) evo.push(`• ${exShort(id)}: ${ls.map(l => (l.secs != null ? l.secs + ' s' : num(l.w)) + (l.st === 'low' ? '▼' : '')).join(' → ')}`);
+        if (ls.length) evo.push(`• ${exShort(id)}: ${ls.map(l => (l.secs != null ? l.secs + ' s' : num(l.w)) + (l.st === 'low' ? '▼' : '') + (l.e === 2 ? ' (al límite)' : '')).join(' → ')}`);
       }));
       if (evo.length) L.push('', '*Evolución de la última serie* (kg; plancha en segundos; ▼ por debajo del plan)', ...evo);
       const hits = {}; ss.forEach(s => ((s.feel && s.feel.where) || []).forEach(id => { hits[id] = (hits[id] || 0) + 1; }));
@@ -392,11 +469,12 @@
     if (ex.sets[fi].w == null && !timed) return null;
     const pts = S.sessions.map(s => ({ s, l: s.logs.find(l => l.ex === id && l.i === fi) }))
       .filter(x => x.l && (timed ? x.l.secs != null : x.l.w != null)).slice(-12)
-      .map(({ s, l }) => ({ t: s.date, v: timed ? l.secs : l.w, tv: timed ? l.ts : l.tw, reps: l.reps, st: l.st, vr: l.v }));
+      .map(({ s, l }) => ({ t: s.date, v: timed ? l.secs : l.w, tv: timed ? l.ts : l.tw, reps: l.reps, st: l.st, vr: l.v, e: l.e }));
     return { id, pts, timed };
   }
   const fmtV = (d, v) => v == null ? '–' : d.timed ? v + ' s' : kg(v);
   const stTxt = st => st === 'low' ? '▼ por debajo' : st === 'up' ? '▲ por encima' : '✓ cumplido';
+  const stEff = p => stTxt(p.st) + (p.e != null ? ' · ' + EFF_TXT[p.e] : '');
   function chartHtml(id) {
     const d = chartData(id);
     if (!d || !d.pts.length) return '';
@@ -429,7 +507,7 @@
     g += `<text class="c-end" x="${f(lx)}" y="${f(Math.max(11, ly - 10))}" text-anchor="end">${fmtV(d, last.v)}</text>`;
     g += `<rect class="c-hit" x="0" y="0" width="${W}" height="${H}"/>`;
     CHARTS[id] = d;
-    const rows = d.pts.slice().reverse().map(p => `<tr><td>${fdm(p.t)}</td><td>${d.timed ? p.v + ' s' : num(p.v) + ' × ' + p.reps}${VAR(d.id, p.vr) ? ' (' + VAR(d.id, p.vr).short + ')' : ''}</td><td>${fmtV(d, p.tv)}</td><td>${stTxt(p.st)}</td></tr>`).join('');
+    const rows = d.pts.slice().reverse().map(p => `<tr><td>${fdm(p.t)}</td><td>${d.timed ? p.v + ' s' : num(p.v) + ' × ' + p.reps}${VAR(d.id, p.vr) ? ' (' + VAR(d.id, p.vr).short + ')' : ''}</td><td>${fmtV(d, p.tv)}</td><td>${stEff(p)}</td></tr>`).join('');
     const label = `Evolución de ${exShort(id)}: de ${fmtV(d, first.v)} el ${fdm(first.t)} a ${fmtV(d, last.v)} el ${fdm(last.t)}. Usa las flechas para recorrer los entrenos.`;
     return `<div class="chart" data-chart="${id}">
       <p class="c-title">${d.timed ? 'Segundos' : 'Peso'} de la última serie</p>
@@ -448,7 +526,7 @@
       mks.forEach((m, k) => m.classList.toggle('on', k === i));
       const rd = d.read ? d.read(p, i) : null;
       const b = document.createElement('b'); b.textContent = rd ? rd[0] : d.timed ? p.v + ' s' : kg(p.v) + ' × ' + p.reps;
-      const t = document.createTextNode(rd ? rd[1] : fday(p.t) + (VAR(d.id, p.vr) ? ' · ' + VAR(d.id, p.vr).short : '') + (p.tv != null ? ' · objetivo ' + fmtV(d, p.tv) : '') + ' · ' + stTxt(p.st));
+      const t = document.createTextNode(rd ? rd[1] : fday(p.t) + (VAR(d.id, p.vr) ? ' · ' + VAR(d.id, p.vr).short : '') + (p.tv != null ? ' · objetivo ' + fmtV(d, p.tv) : '') + ' · ' + stEff(p));
       read.textContent = ''; read.append(b, t);
     };
     const hide = () => {
@@ -744,13 +822,16 @@
     const timed = set.secs != null;
     let lastTxt = 'Primera vez: empieza con lo que marca el plan.';
     if (last) lastTxt = `Última vez (${dShort(last.at)}): <b>${logText(last)}</b> ${mark(last.st)}` +
+      (last.e != null ? ' · fue ' + EFF_TXT[last.e] : '') +
       (last.st === 'low' ? ' — te quedaste por debajo: si hoy tampoco sale limpio, baja un escalón.' : '');
+    const vid = ex.vv ? ex.vv.id : null, gTop = gearShown(ex.id, vid);
     const running = timed && T && T.run, fl = feelFlag(ex.id, step.i === 0);
     return `<section class="stage">
       ${step.group ? `<p class="eyebrow">${step.group}</p>` : ''}
       <h1>${ex.name}</h1>
       <p class="pill ${hasWarm(ex) && step.i === 0 ? 'soft' : ''}">${setLabel(ex, step.i)}</p>
       ${varPicker(step.ex)}
+      ${gTop ? gearLine(ex.id, vid, '') : ''}
       <div class="target">${timed ? `<div><b id="tt">${running ? clock((T.endAt - Date.now()) / 1000) : set.secs}</b><span>${running ? 'aguanta' : 'segundos'}</span></div>`
         : `<div><b>${set.reps}</b><span>repeticiones</span></div>${tw != null ? `<div><b>${kg(tw).replace(' kg', '')}</b><span>kg ${ex.unit ? '· ' + ex.unit : ''}</span></div>` : ''}`}</div>
       ${ex.perSide ? `<p class="muted center">${ex.perSide}</p>` : ''}
@@ -764,6 +845,7 @@
         <ol class="how">${ex.how.map(x => `<li>${x}</li>`).join('')}</ol>
         ${ex.note ? `<p class="callout"><b>Ojo:</b> ${ex.note}</p>` : ''}
         <p class="muted">Músculos: ${ex.muscles}</p>
+        ${gTop ? '' : gearLine(ex.id, vid, '')}
         ${videoBlock(ex)}
       </details></section>
       <footer class="dock">${timed
@@ -784,6 +866,9 @@
       ${L.secs != null ? stepper('secs', 'Segundos', L.secs) : ''}
       <p class="status ${st}">${msg}</p>
       ${st === 'low' ? '<p class="muted center">No pasa nada: la técnica manda sobre el peso. La próxima vez, un escalón menos en esta serie.</p>' : ''}
+      ${isTop(ex, step.i) ? `<p class="lbl">¿Cómo fue esta última serie?</p><div class="opts eff" role="group" aria-label="Esfuerzo de la última serie">${EFF.map((l, v) =>
+        `<button class="opt ${L.e === v ? 'on' + (v === 2 ? ' mid' : '') : ''}" data-a="effort" data-v="${v}" aria-pressed="${L.e === v}">${l}<small>${EFF_SUB[v]}</small></button>`).join('')}</div>
+        ${L.e === 2 ? '<p class="muted center">Al límite es cuando más cuesta no aguantar el aire. Mientras salga así, la app no te propondrá subir peso.</p>' : ''}` : ''}
       </section>
       <footer class="dock"><button class="btn ghost" data-a="back">Volver</button><button class="btn primary" data-a="savelog">Guardar</button></footer>`;
   }
@@ -795,11 +880,15 @@
 
   function vRest() {
     const a = S.active, step = a.steps[a.i], ex = exV(step.ex), set = ex.sets[step.i], tw = targetW(ex, step.i);
-    const prev = a.steps[a.i - 1];
+    const prev = a.steps[a.i - 1], g = prev.ex !== step.ex ? gearOf(step.ex, ex.vv && ex.vv.id) : '';
+    const ask = canNotify && S.settings.notif == null && Notification.permission !== 'denied';
     return `<section class="stage center"><p class="eyebrow">Descanso · ${a.rest.min === a.rest.max ? a.rest.max : a.rest.min + '-' + a.rest.max} segundos</p>
       <div class="dial" id="dial"><div><b id="rt">${clock(a.rest.max)}</b><span id="rs">Respira lento por la nariz</span></div></div>
       <div class="next"><p class="eyebrow">Siguiente</p><h2>${prev.ex !== step.ex ? ex.name + ' · ' : ''}${setLabel(ex, step.i)}</h2>
-      <p class="big-line">${set.secs != null ? set.secs + ' segundos' : set.reps + ' repeticiones' + (tw != null ? ' × ' + kg(tw) : '')}</p></div></section>
+      <p class="big-line">${set.secs != null ? set.secs + ' segundos' : set.reps + ' repeticiones' + (tw != null ? ' × ' + kg(tw) : '')}</p>
+      ${g ? `<p class="gear-next"><span aria-hidden="true">🔧</span> ${esc(g)}</p>` : ''}</div></section>
+      ${ask ? `<section class="card ask"><p><b>¿Te aviso si sales de la app?</b> Si durante el descanso miras otra cosa, te llegará una notificación cuando toque la siguiente serie.</p>
+        <div class="row"><button class="btn ghost" data-a="notifno">No, gracias</button><button class="btn primary" data-a="notifyes">Activar</button></div></section>` : ''}
       <footer class="dock"><button class="btn ghost" data-a="rplus">+15 s</button><button class="btn primary" data-a="rskip">Empezar ya</button></footer>`;
   }
 
@@ -831,14 +920,15 @@
   }
 
   function suggestions(a) {
-    const out = [];
+    const out = [], where = (a.feel && a.feel.where) || [];
     dayEx(DAY(a.day)).forEach(id => {
       const ex = EX(id), fi = ex.sets.length - 1;
       if (ex.sets[fi].w == null) return;
       const cur = a.logs.find(l => l.ex === id && l.i === fi);
       if (!cur || cur.st === 'low') return;
       const prev = lastLog(id, fi);
-      if (prev && prev.st !== 'low' && prev.tw === cur.tw) out.push(ex);
+      if (!(prev && prev.st !== 'low' && prev.tw === cur.tw)) return;
+      out.push({ ex, cur, hold: where.includes(id) ? 'pain' : cur.e === 2 ? 'hard' : '' });
     });
     return out;
   }
@@ -847,10 +937,16 @@
     const low = a.logs.filter(l => l.st === 'low').length;
     let h = `<header class="top"><p class="eyebrow">${d.name} · ${d.weekday}</p><h1>${a.stopped ? 'Entreno parado' : 'Entreno terminado'}</h1>
       <p class="muted">${a.logs.length} series registradas · ${durOf(a)} min${low ? ' · ' + low + ' por debajo del plan' : a.logs.length ? ' · todo cumplido' : ''}</p></header>`;
-    suggestions(a).forEach(ex => {
+    suggestions(a).forEach(({ ex, cur, hold }) => {
       const s1 = ex.step, s2 = ex.step === 1 ? 2 : ex.step === 2 ? 4 : ex.step === 2.5 ? 5 : 10;
+      if (hold && !sug[ex.id]) {
+        h += `<section class="card"><p class="eyebrow">Repite el peso</p><h2>${ex.name}</h2><p>Has completado la última serie dos sesiones seguidas, ${hold === 'pain'
+          ? 'pero hoy notaste molestia en este ejercicio. Mejor no subir hasta que salga sin molestias.'
+          : 'pero hoy fue al límite. Repite el peso hasta que te salga justa o cómoda.'}</p></section>`;
+        return;
+      }
       h += `<section class="card accent"><p class="eyebrow">Toca subir peso</p><h2>${ex.name}</h2>
-        <p>Has completado la serie 4 dos sesiones seguidas.</p>
+        <p>Has completado la última serie dos sesiones seguidas${cur.e != null ? ' y hoy fue ' + EFF_TXT[cur.e] : ''}.</p>
         ${sug[ex.id] ? `<p class="status ok">Subido ${kg(sug[ex.id])} en todas las series para la próxima vez</p>`
           : `<div class="row"><button class="btn primary" data-a="up" data-ex="${ex.id}" data-n="${s1}">+${kg(s1)}</button>
              <button class="btn ghost" data-a="up" data-ex="${ex.id}" data-n="${s2}">+${kg(s2)}</button></div>`}</section>`;
@@ -860,7 +956,7 @@
       ${need ? '<p class="status low">Marca la molestia abdominal, aunque sea «Ninguna».</p>' : ''}</section>`;
     h += '<section class="card"><h2>Resumen</h2>' + dayEx(d).map(id => {
       const ls = a.logs.filter(l => l.ex === id);
-      return ls.length ? `<div class="hrow"><b>${EX(id).name}</b><p>${ls.map(l => `<span class="chip ${l.st}">${setShort(EX(id), l.i)} ${logText(l)} ${mark(l.st)}</span>`).join('')}</p></div>` : '';
+      return ls.length ? `<div class="hrow"><b>${EX(id).name}</b><p>${ls.map(l => `<span class="chip ${l.st}">${setShort(EX(id), l.i)} ${logText(l)} ${mark(l.st)}</span>${effChip(l)}`).join('')}</p></div>` : '';
     }).join('') + `<label class="lbl" for="sdt">Fecha y hora de inicio</label><input type="datetime-local" id="sdt" value="${a.sdt || toInput(a.t0)}">
       <label class="lbl" for="smin">Duración (minutos)</label><input type="text" class="fld" id="smin" inputmode="numeric" value="${a.smin || durOf(a)}">
       <label class="lbl" for="note">Nota del día (opcional)</label><textarea id="note" rows="2" placeholder="Algo más que quieras recordar…">${esc(a.note || '')}</textarea></section>
@@ -890,12 +986,14 @@
       dayEx(d).forEach(id => {
         const ex = EX(id), rows = S.sessions.filter(s => s.logs.some(l => l.ex === id)).slice(-5).reverse();
         const weighted = ex.sets[0].w != null;
-        h += `<section class="card"><h3>${ex.name}</h3>
+        const gl = [null].concat((ex.variants || []).map(v => v.id)).filter(vid => gearShown(id, vid))
+          .map(vid => gearLine(id, vid, ex.variants ? (vid ? VAR(id, vid).short : ex.vlabel || 'normal') : '')).join('');
+        h += `<section class="card"><h3>${ex.name}</h3>${gl}
           ${weighted ? `<div class="adjrow"><span>Objetivo serie ${workCount(ex)}: <b>${kg(targetW(ex, ex.sets.length - 1))}</b>${adj(id) ? ' (plan ' + (adj(id) > 0 ? '+' : '') + kg(adj(id)) + ')' : ''}</span>
             <span><button data-a="tune" data-ex="${id}" data-d="-1" aria-label="Bajar objetivo">−</button><button data-a="tune" data-ex="${id}" data-d="1" aria-label="Subir objetivo">+</button></span></div>` : ''}
           ${chartHtml(id)}
           ${rows.length ? rows.map(s => `<div class="hrow"><b>${dShort(s.date)}</b><p>${s.logs.filter(l => l.ex === id).map(l =>
-            `<span class="chip ${l.st}">${setShort(ex, l.i)} ${logText(l)} ${mark(l.st)}</span>`).join('')}${varOf(s, id) ? `<span class="chip soft">${cap(varOf(s, id).short)}</span>` : ''}${s.feel && s.feel.where && s.feel.where.includes(id) ? '<span class="chip mid">⚠ molestia</span>' : ''}</p></div>`).join('') : '<p class="muted">Sin registros.</p>'}</section>`;
+            `<span class="chip ${l.st}">${setShort(ex, l.i)} ${logText(l)} ${mark(l.st)}</span>${effChip(l)}`).join('')}${varOf(s, id) ? `<span class="chip soft">${cap(varOf(s, id).short)}</span>` : ''}${s.feel && s.feel.where && s.feel.where.includes(id) ? '<span class="chip mid">⚠ molestia</span>' : ''}</p></div>`).join('') : '<p class="muted">Sin registros.</p>'}</section>`;
       });
     });
     const notes = S.sessions.filter(s => s.note || s.stopped).slice(-8).reverse();
@@ -910,6 +1008,8 @@
       <section class="card"><h2>Reglas del entrenador</h2>${P.rules.map(r => `<p><b>${r[0]}.</b> ${r[1]}</p>`).join('')}
         <p class="callout"><b>Señal de parar:</b> ${P.stop}</p></section>
       <section class="card"><h2>Ajustes</h2>${tog('sound', 'Sonido al acabar el descanso')}${tog('vib', 'Vibración')}${tog('voice', 'Voz: guía la respiración y cuenta repeticiones')}
+        ${canNotify ? `<label class="toggle"><span>Aviso si sales de la app durante el descanso</span><input type="checkbox" data-set="notif" ${notifOn() ? 'checked' : ''}></label>
+          ${Notification.permission === 'denied' ? '<p class="muted">El navegador tiene bloqueadas las notificaciones de esta app. Actívalas en los permisos del sitio (el icono junto a la dirección) o en los ajustes de la app del móvil.</p>' : ''}` : ''}
         <label class="toggle"><span>Segundos por estiramiento</span><select data-set="stretch">${[15, 20, 25, 30].map(n => `<option ${st.stretch === n ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
         <button class="btn ghost" data-a="test">Probar el aviso de fin de descanso</button>
         ${view.test ? `<p class="muted">${view.test}</p>` : '<p class="muted">Suena y vibra igual que al acabar un descanso. Sube el volumen multimedia del móvil.</p>'}</section>
@@ -938,6 +1038,7 @@
     app.querySelectorAll('[data-chart]').forEach(initChart);
     const inGym = view.name === 'session' || view.name === 'warm' || view.name === 'stretch';
     keepAwake(inGym);
+    if (document.getElementById('dial')) armRest(); else disarmRest();
     if (document.getElementById('wt') && W.run) ticker = setInterval(tickWarm, 250);
     else if (document.getElementById('dial')) { tickRest(); ticker = setInterval(tickRest, 250); }
     else if (document.getElementById('stt') && (ST.phase === 'prep' || ST.phase === 'hold')) ticker = setInterval(tickStretch, 200);
@@ -1024,6 +1125,7 @@
       const a = S.active, step = a.steps[a.i], ex = EX(step.ex), set = ex.sets[step.i], tw = targetW(ex, step.i), L = view.log;
       const log = { ex: step.ex, i: step.i, at: Date.now(), st: status(L, set, tw) }, vv = curVar(step.ex);
       if (vv) log.v = vv.id;
+      if (L.e != null) log.e = L.e;
       if (L.secs != null) { log.secs = L.secs; log.ts = set.secs; } else { log.reps = L.reps; log.tr = set.reps; if (tw != null) { log.w = L.w; log.tw = tw; } }
       a.logs.push(log);
       advance();
@@ -1045,6 +1147,21 @@
       view.sub = null; save(); say('Paramos aquí. Apunta cómo te has encontrado.'); render();
     },
     video: d => { view.video = d.ex || null; render(true); },
+    gearedit: d => { view.gear = d.k; render(true); const i = document.getElementById('gearin'); if (i) i.focus(); },
+    gearcancel: () => { view.gear = null; render(true); },
+    gearsave: d => {
+      const i = document.getElementById('gearin'), v = i ? i.value.trim().slice(0, 120) : '';
+      S.gear = S.gear || {};
+      if (v) S.gear[d.k] = v; else delete S.gear[d.k];
+      view.gear = null; save(); render(true);
+    },
+    effort: d => { view.log.e = view.log.e === +d.v ? null : +d.v; render(true); },
+    notifyes: async () => {
+      let p = 'denied';
+      try { p = await Notification.requestPermission(); } catch (e) { /* nada */ }
+      S.settings.notif = p === 'granted'; save(); render(true);
+    },
+    notifno: () => { S.settings.notif = false; save(); render(true); },
     var: d => { const a = S.active; a.vars = a.vars || {}; a.vars[d.ex] = d.v || null; save(); lastSaid = ''; render(true); },
     varmild: d => {
       const a = S.active, f = a.feel || (a.feel = newFeel());
@@ -1084,7 +1201,10 @@
       view.test = 'Sonido: ' + (!st.sound ? 'desactivado en los ajustes' : actx ? 'enviado (si no lo oyes, sube el volumen multimedia o quita el modo silencio)' : 'este navegador no lo permite') +
         '. Voz: ' + (!st.voice ? 'desactivada en los ajustes' : canSpeak ? 'enviada' : 'este navegador no la tiene') +
         '. Vibración: ' + (!st.vib ? 'desactivada en los ajustes' : navigator.vibrate ? 'enviada' : 'este móvil no la permite desde una web (pasa en iPhone)') +
-        '. Pantalla siempre encendida durante el entreno: ' + (navigator.wakeLock ? 'disponible' : 'no disponible en este navegador') + '.';
+        '. Pantalla siempre encendida durante el entreno: ' + (navigator.wakeLock ? 'disponible' : 'no disponible en este navegador') +
+        '. Aviso fuera de la app: ' + (!canNotify ? 'este navegador no lo permite' : notifOn() ? 'sal ahora de la app y en 6 segundos te llegará una notificación de prueba'
+          : Notification.permission === 'denied' ? 'bloqueado en los permisos del navegador' : 'desactivado (actívalo arriba)') + '.';
+      if (notifOn()) setTimeout(() => notify('Prueba de aviso', 'Así te avisará cuando acabe el descanso y estés fuera de la app.', 'test'), 6000);
       render(true);
     },
     lock: () => { try { localStorage.removeItem('entreno.key'); } catch (e) { /* nada */ } location.reload(); },
@@ -1165,6 +1285,10 @@
     unlockAudio();
     ACT[b.dataset.a](b.dataset);
   });
+  document.addEventListener('keydown', e => {
+    if (e.key !== 'Enter' || !e.target || e.target.id !== 'gearin') return;
+    e.preventDefault(); const b = document.querySelector('[data-a=gearsave]'); if (b) b.click();
+  });
   document.addEventListener('change', e => {
     const t = e.target;
     if (t.dataset.sdate != null) {
@@ -1172,6 +1296,11 @@
       if (ts && s) { s.date = ts; s.logs.forEach(l => { l.at = ts; }); sortSessions(); view.editFeel = null; save(); }
       else alert('Revisa la fecha: no puede estar vacía ni ser futura.');
       render(true);
+    }
+    if (t.dataset.set === 'notif') {
+      if (!t.checked) { S.settings.notif = false; save(); render(true); return; }
+      Notification.requestPermission().then(p => { S.settings.notif = p === 'granted'; save(); render(true); }).catch(() => {});
+      return;
     }
     if (t.dataset.set) { S.settings[t.dataset.set] = t.type === 'checkbox' ? t.checked : +t.value; save(); }
     if (t.id === 'imp' && t.files[0]) t.files[0].text().then(txt => {

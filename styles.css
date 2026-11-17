@@ -191,6 +191,7 @@ input[type="datetime-local"] { width: 100%; min-height: 46px; margin-top: 6px; p
 .stats span { font-size: .75rem; color: var(--muted); }
 .wk-row b.grow { width: auto; flex: 1; }
 h3.sub { margin: 22px 0 0; }
+.report { width: 100%; min-height: 52vh; margin-top: 10px; padding: 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--bg); color: var(--text); font: inherit; font-size: .9rem; line-height: 1.45; resize: vertical; }
 .lbl { display: block; margin-top: 14px; font-size: .85rem; color: var(--muted); }
 textarea, select { width: 100%; margin-top: 6px; padding: 10px; border-radius: 12px; border: 1px solid var(--line); background: var(--bg); color: var(--text); font: inherit; }
 .toggle { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 48px; border-top: 1px solid var(--line); }

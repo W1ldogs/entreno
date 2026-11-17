@@ -239,6 +239,98 @@
     if (mf) view.mfull = mf.checked;
   }
 
+  /* ---------- resumen para el entrenador ---------- */
+  const num = n => String(Math.round(n * 100) / 100).replace('.', ',');
+  const fday = ts => new Date(ts).toLocaleDateString('es-ES', { weekday: 'short', day: 'numeric', month: 'short' }).replace(/[.,]/g, '');
+  const fdm = ts => new Date(ts).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' }).replace(/\./g, '');
+  const addDays = (ts, n) => { const d = new Date(ts); d.setDate(d.getDate() + n); return d.getTime(); };
+  const setTxt = (w, reps, secs) => secs != null ? secs + ' s' : (w != null ? num(w) + '×' : '') + reps;
+  const plural = (n, one, many) => n + ' ' + (n === 1 ? one : many);
+  function feelLine(f) {
+    if (!hasFeel(f)) return '';
+    const where = f.where && f.where.length ? ' en ' + f.where.map(exShort).join(', ') : '';
+    return [f.abd != null ? cap(ABD_TXT[f.abd]) + (f.abd > 0 ? where : '') : '', f.en != null ? 'energía ' + ENERGY[f.en].toLowerCase() : '']
+      .filter(Boolean).join(' · ');
+  }
+  function sessionBlock(s) {
+    const d = DAY(s.day);
+    const lines = [`*${d ? d.name : s.day} · ${fday(s.date)}*${s.stopped ? ' (parado)' : ''}${s.manual ? ' (apuntado a mano)' : ''}`];
+    const fl = feelLine(s.feel); if (fl) lines.push(fl);
+    if (!s.logs.length) lines.push('Sin detalle de series.');
+    (d ? dayEx(d) : [...new Set(s.logs.map(l => l.ex))]).forEach(id => {
+      const ex = EX(id); if (!ex) return;
+      const ls = s.logs.filter(l => l.ex === id && !(hasWarm(ex) && l.i === 0)).sort((a, b) => a.i - b.i);
+      if (!ls.length) return;
+      const parts = ls.map(l => setTxt(l.w, l.reps, l.secs) + (l.st === 'low' ? `▼ (obj. ${setTxt(l.tw, l.tr, l.ts)})` : l.st === 'up' ? '▲' : ''));
+      lines.push(`• ${exShort(id)}: ${parts.join(' · ')}${ls.some(l => l.st === 'low') ? '' : ' ✓'}`);
+    });
+    if (s.note && s.note.trim()) lines.push('Nota: ' + s.note.trim());
+    return lines.join('\n');
+  }
+  function reviewLines(ss) {
+    const out = [], rated = ss.filter(s => s.feel && s.feel.abd != null);
+    if (rated.length) {
+      const c = [0, 0, 0]; rated.forEach(s => c[s.feel.abd]++);
+      out.push('Entrenos: ' + [c[0] ? c[0] + ' sin molestias' : '', c[1] ? c[1] + ' con molestia leve' : '',
+        c[2] ? plural(c[2], 'parado', 'parados') + ' por molestias' : ''].filter(Boolean).join(', '));
+    }
+    const low = {}; ss.forEach(s => s.logs.forEach(l => { if (l.st === 'low') low[l.ex] = (low[l.ex] || 0) + 1; }));
+    const lows = Object.keys(low).filter(EX);
+    if (lows.length) out.push('Por debajo del plan: ' + lows.map(id => `${exShort(id)} (${plural(low[id], 'serie', 'series')})`).join(', '));
+    const ups = Object.keys(S.adj).filter(id => S.adj[id] && EX(id));
+    if (ups.length) out.push('Pesos ajustados respecto al plan: ' + ups.map(id => `${exShort(id)} ${S.adj[id] > 0 ? '+' : ''}${num(S.adj[id])} kg`).join(', '));
+    return out.length ? ['*Para revisar*', ...out.map(x => '• ' + x)] : [];
+  }
+  function buildReport(mode) {
+    const w0 = weekStart(Date.now()), L = [];
+    if (mode !== '4w') {
+      const from = mode === 'prev' ? addDays(w0, -7) : w0, to = addDays(from, 7);
+      const ss = S.sessions.filter(s => s.date >= from && s.date < to);
+      const done = P.days.filter(d => ss.some(s => s.day === d.id)), miss = P.days.filter(d => !done.includes(d));
+      const end = addDays(from, 6), same = new Date(from).getMonth() === new Date(end).getMonth();
+      L.push(`*Resumen de entreno · semana del ${same ? new Date(from).getDate() : fdm(from)} al ${fdm(end)}*`,
+        `Días hechos: ${done.length} de ${P.days.length}${miss.length ? ' · ' + (mode === 'prev' ? 'sin hacer: ' : 'pendiente: ') + miss.map(d => d.name).join(', ') : ''}`);
+      if (!ss.length) return L.concat('', 'No hay entrenos apuntados esta semana.').join('\n');
+      L.push('Pesos en kg (peso×repeticiones). ✓ cumplido · ▼ por debajo · ▲ por encima');
+      ss.forEach(s => L.push('', sessionBlock(s)));
+      L.push('', ...reviewLines(ss));
+    } else {
+      const from = addDays(w0, -21), to = addDays(w0, 7);
+      const ss = S.sessions.filter(s => s.date >= from && s.date < to);
+      L.push(`*Resumen de entreno · últimas 4 semanas (${fdm(from)} – ${fdm(addDays(w0, 6))})*`,
+        'Días hechos por semana: ' + [0, 1, 2, 3].map(k => {
+          const a = addDays(from, 7 * k), b = addDays(a, 7);
+          return new Set(ss.filter(s => s.date >= a && s.date < b).map(s => s.day)).size + '/' + P.days.length;
+        }).join(' · '));
+      if (!ss.length) return L.concat('', 'No hay entrenos apuntados en estas semanas.').join('\n');
+      const evo = [];
+      P.days.forEach(d => dayEx(d).forEach(id => {
+        const ex = EX(id), fi = ex.sets.length - 1;
+        if (ex.sets[fi].w == null && ex.sets[fi].secs == null) return;
+        const ls = ss.map(s => s.logs.find(l => l.ex === id && l.i === fi)).filter(Boolean);
+        if (ls.length) evo.push(`• ${exShort(id)}: ${ls.map(l => (l.secs != null ? l.secs + ' s' : num(l.w)) + (l.st === 'low' ? '▼' : '')).join(' → ')}`);
+      }));
+      if (evo.length) L.push('', '*Evolución de la última serie* (kg; plancha en segundos; ▼ por debajo del plan)', ...evo);
+      const hits = {}; ss.forEach(s => ((s.feel && s.feel.where) || []).forEach(id => { hits[id] = (hits[id] || 0) + 1; }));
+      const hk = Object.keys(hits).filter(EX);
+      if (hk.length) L.push('', '*Molestias por ejercicio*', ...hk.map(id => `• ${exShort(id)}: ${plural(hits[id], 'vez', 'veces')}`));
+      const notes = ss.filter(s => s.note && s.note.trim()).map(s => `• ${fday(s.date)}: ${s.note.trim()}`);
+      if (notes.length) L.push('', '*Notas*', ...notes);
+      L.push('', ...reviewLines(ss));
+    }
+    return L.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  }
+  function vReport() {
+    const mode = view.mode || 'week';
+    const tabs = [['week', 'Esta semana'], ['prev', 'Semana pasada'], ['4w', '4 semanas']];
+    return `<header class="bar"><button class="icon" data-a="go" data-v="${view.from || 'home'}" aria-label="Volver">←</button><span>Resumen para el entrenador</span><span></span></header>
+      <section class="card"><div class="opts">${tabs.map(([k, l]) =>
+        `<button class="opt ${mode === k ? 'on' : ''}" data-a="rmode" data-m="${k}" aria-pressed="${mode === k}">${l}</button>`).join('')}</div>
+      <p class="muted">Puedes retocar el texto antes de enviarlo.</p>
+      <textarea id="rtxt" class="report" aria-label="Texto del resumen">${esc(buildReport(mode))}</textarea></section>
+      <footer class="dock"><button class="btn ${navigator.share ? 'ghost' : 'primary'}" data-a="rcopy">Copiar</button>${navigator.share ? '<button class="btn primary" data-a="rshare">Compartir</button>' : ''}</footer>`;
+  }
+
   /* ---------- vistas ---------- */
   const nav = cur => `<nav class="tabs">${[['home', 'Entreno'], ['hist', 'Histórico'], ['more', 'Más']].map(([v, l]) =>
     `<button data-a="go" data-v="${v}" class="${cur === v ? 'on' : ''}">${l}</button>`).join('')}</nav>`;
@@ -272,6 +364,7 @@
       <section class="card week"><div class="wk-head"><h2>Esta semana</h2><span class="pill ${nDone === P.days.length ? '' : 'soft'}">${nDone} de ${P.days.length}</span></div>
       <div class="wk-strip">${cells}</div>
       ${P.days.map(d => { const s = doneBy(d.id); return `<div class="wk-row ${s ? 'ok' : ''}"><b>${s ? '✓' : '○'} ${d.name}</b><span>${s ? 'Hecho el ' + dWhen(s.date) + (s.feel && s.feel.abd != null ? ' · ' + ABD_TXT[s.feel.abd] : '') : 'Pendiente · previsto el ' + d.weekday.toLowerCase()}</span></div>`; }).join('')}
+      <button class="btn ghost" data-a="report" data-from="home">Resumen para el entrenador</button>
       </section>`;
     if (S.active) {
       const a = S.active, d = DAY(a.day);
@@ -472,6 +565,7 @@
 
   function vHist() {
     let h = '<header class="top"><h1>Histórico</h1><p class="muted">Últimas sesiones de cada ejercicio. ✓ cumplido · ▼ por debajo · ▲ por encima</p></header>';
+    if (S.sessions.length) h += '<button class="btn ghost" data-a="report" data-from="hist">Resumen para el entrenador</button>';
     if (!S.sessions.length) h += '<section class="card"><p>Todavía no hay entrenos guardados. Cuando termines el primero, aparecerá aquí.</p></section>';
     h += feelStats();
     if (S.sessions.length) h += '<h2 class="sec">Entrenos hechos</h2><section class="card">' +
@@ -517,7 +611,7 @@
   }
 
   /* ---------- render ---------- */
-  const VIEWS = { home: vHome, manual: vManual, pre: vPre, session: vSession, warm: () => soloBar('Calentamiento') + vWarm(), stretch: () => soloBar('Estiramientos') + vStretch(), hist: vHist, more: vMore };
+  const VIEWS = { home: vHome, manual: vManual, report: vReport, pre: vPre, session: vSession, warm: () => soloBar('Calentamiento') + vWarm(), stretch: () => soloBar('Estiramientos') + vStretch(), hist: vHist, more: vMore };
   const soloBar = t => `<header class="bar"><button class="icon" data-a="go" data-v="home" aria-label="Volver">←</button><span>${t}</span><span class="bar-r">${vBtn()}</span></header>`;
 
   function render(keepScroll) {
@@ -670,6 +764,18 @@
       render(true);
     },
     lock: () => { try { localStorage.removeItem('entreno.key'); } catch (e) { /* nada */ } location.reload(); },
+    report: d => { view = { name: 'report', from: d.from || 'home', mode: 'week' }; render(); },
+    rmode: d => { view.mode = d.m; render(true); },
+    rcopy: async () => {
+      const t = document.getElementById('rtxt'), b = document.querySelector('[data-a=rcopy]');
+      let ok = true;
+      try { await navigator.clipboard.writeText(t.value); } catch (e) { t.select(); ok = document.execCommand && document.execCommand('copy'); }
+      if (b) { b.textContent = ok ? '¡Copiado!' : 'Selecciónalo y cópialo'; setTimeout(() => { b.textContent = 'Copiar'; }, 2500); }
+    },
+    rshare: async () => {
+      const t = document.getElementById('rtxt').value;
+      try { await navigator.share({ text: t }); } catch (e) { /* cancelado */ }
+    },
     manual: d => { view = { name: 'manual', day: d.day, feel: newFeel() }; render(); },
     msave: d => {
       const ts = fromInput(document.getElementById('mdt').value);

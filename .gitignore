@@ -1,0 +1,7 @@
+# Documentos personales del entrenador (salud y dieta): no se publican
+Planes/
+# El plan en claro no se publica: solo plan.enc.json (cifrado con tools/cifrar.js)
+plan.js
+.claude/
+*.pdf
+*.docx

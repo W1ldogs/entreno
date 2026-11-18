@@ -4,48 +4,23 @@
    Si ya existe plan.enc.json se reutiliza su "sal": así, con la misma contraseña,
    los dispositivos que ya entraron no vuelven a pedirla al actualizar el plan. */
 const crypto = require('crypto'), fs = require('fs'), path = require('path');
-let piped = null;
+const ask = require('./pedir');
 const root = path.join(__dirname, '..'), SRC = path.join(root, 'plan.js'), OUT = path.join(root, 'plan.enc.json');
 const ITER = 600000;
 
-// Lee una línea sin mostrarla (un * por carácter). Si no hay terminal interactiva, lee con eco.
-function ask(q) {
-  return new Promise(res => {
-    const inp = process.stdin;
-    process.stdout.write(q);
-    if (!inp.isTTY || !inp.setRawMode) {
-      if (!piped) piped = fs.readFileSync(0, 'utf8').split(/\r?\n/);
-      if (!piped.length) { console.error('\nSin entrada.'); process.exit(1); }
-      process.stdout.write('\n'); return res(piped.shift());
-    }
-    let buf = '';
-    inp.setRawMode(true); inp.resume(); inp.setEncoding('utf8');
-    const onData = chunk => {
-      for (const ch of chunk) {
-        if (ch === '\r' || ch === '\n') {
-          inp.setRawMode(false); inp.pause(); inp.removeListener('data', onData);
-          process.stdout.write('\n'); return res(buf);
-        }
-        if (ch === '\u0003') { process.stdout.write('\nCancelado.\n'); process.exit(1); }
-        if (ch === '\b' || ch === '\u007f') { if (buf) { buf = buf.slice(0, -1); process.stdout.write('\b \b'); } }
-        else if (ch >= ' ') { buf += ch; process.stdout.write('*'); }
-      }
-    };
-    inp.on('data', onData);
-  });
-}
-
-// ¿Esta contraseña abre el plan cifrado que ya está publicado?
-function opens(box, pw) {
+// Descifra el plan publicado con esta contraseña; null si no la abre.
+function decrypt(box, pw) {
   try {
     const key = crypto.pbkdf2Sync(pw, Buffer.from(box.salt, 'base64'), box.iter || ITER, 32, 'sha256');
     const raw = Buffer.from(box.data, 'base64');
     const d = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(box.iv, 'base64'));
     d.setAuthTag(raw.subarray(raw.length - 16));
-    Buffer.concat([d.update(raw.subarray(0, raw.length - 16)), d.final()]);
-    return true;
-  } catch (e) { return false; }
+    return Buffer.concat([d.update(raw.subarray(0, raw.length - 16)), d.final()]);
+  } catch (e) { return null; }
 }
+const opens = (box, pw) => decrypt(box, pw) !== null;
+module.exports = { decrypt };
+if (require.main !== module) return;
 
 (async () => {
   if (!fs.existsSync(SRC)) { console.error('No encuentro plan.js'); process.exit(1); }

@@ -5,3 +5,5 @@ plan.js
 .claude/
 *.pdf
 *.docx
+# Paquete privado para pasar el proyecto a otro ordenador
+*.zip

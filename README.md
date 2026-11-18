@@ -11,6 +11,16 @@ App web instalable para seguir un plan de fuerza en el gimnasio: series guiadas,
 - `app.js`, `styles.css`, `index.html` — la app.
 - `sw.js`, `manifest.webmanifest`, `icons/` — instalación en el móvil y uso sin conexión.
 
+## Trabajar desde otro ordenador
+
+```bash
+git clone https://github.com/W1ldogs/entreno.git
+cd entreno
+node tools/descifrar.js
+```
+
+El último comando pide la contraseña del plan y vuelve a crear `plan.js`, que no se publica. Para cambiar el plan, se edita `plan.js` y se cifra otra vez con `node tools/cifrar.js`.
+
 ## Probar en el ordenador
 
 ```bash

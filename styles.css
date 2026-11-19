@@ -259,6 +259,13 @@ button.video { background: none; border: 0; font: inherit; font-weight: 650; col
 .cal-leg span { display: inline-flex; align-items: center; gap: 5px; }
 .cal-leg .sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; background: color-mix(in srgb, var(--accent) 40%, transparent); border: 1px solid var(--accent); }
 .cal-det { margin-top: 8px; }
+.mimg { margin: 8px 0 4px; }
+.mimg img { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 12px; background: var(--line); }
+.mimg.own img { aspect-ratio: 4 / 3; }
+.mimg figcaption { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 10px; font-size: .8rem; color: var(--muted); margin-top: 2px; text-align: left; }
+.mimg figcaption span { display: flex; gap: 10px; }
+.daylist { margin: 4px 0 12px; padding-left: 22px; }
+.daylist li { margin: 3px 0; }
 .gear { display: flex; align-items: center; gap: 8px; font-size: .92rem; margin: 6px 0 0; }
 .gear .grow { flex: 1; }
 .gear.edit { display: block; margin: 8px 0 4px; }

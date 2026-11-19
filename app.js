@@ -3,7 +3,7 @@
   const P = window.PLAN, KEY = 'entreno.v1';
   const app = document.getElementById('app');
   Object.keys(P.exercises).forEach(k => { P.exercises[k].id = k; });
-  const DEF = { sessions: [], adj: {}, gear: {}, settings: { sound: true, vib: true, voice: true, stretch: 15, notif: null }, active: null, warmAt: 0, body: [], backupAt: 0, backupN: 0, backupSnooze: 0 };
+  const DEF = { sessions: [], adj: {}, gear: {}, settings: { sound: true, vib: true, voice: true, stretch: 15, notif: null, warmSet: false }, active: null, warmAt: 0, body: [], backupAt: 0, backupN: 0, backupSnooze: 0 };
 
   /* ---------- estado ---------- */
   let S = load();
@@ -39,6 +39,8 @@
   const adj = id => S.adj[id] || 0;
   const hasWarm = ex => !ex.noWarm;
   const workCount = ex => ex.sets.length - (hasWarm(ex) ? 1 : 0);
+  // la serie de calentamiento de 20 repeticiones de cada ejercicio solo se hace si se activa en Más
+  const useSet = (ex, i) => !(i === 0 && hasWarm(ex) && !S.settings.warmSet);
   const setLabel = (ex, i) => hasWarm(ex) && i === 0 ? 'Serie de calentamiento' : 'Serie ' + (hasWarm(ex) ? i : i + 1) + ' de ' + workCount(ex);
   const setShort = (ex, i) => hasWarm(ex) && i === 0 ? 'Cal.' : 'S' + (hasWarm(ex) ? i : i + 1);
   // peso objetivo: el del plan más las subidas aceptadas (la serie de calentamiento no cambia)
@@ -142,11 +144,11 @@
     day.blocks.forEach(b => {
       if (typeof b === 'string') {
         const ex = EX(b);
-        ex.sets.forEach((s, i) => steps.push({ type: 'set', ex: b, i, rest: ex.rest }));
+        ex.sets.forEach((s, i) => { if (useSet(ex, i)) steps.push({ type: 'set', ex: b, i, rest: ex.rest }); });
       } else {
         const rounds = Math.max(...b.ex.map(id => EX(id).sets.length));
         for (let r = 0; r < rounds; r++) b.ex.forEach((id, k) => {
-          if (EX(id).sets[r]) steps.push({ type: 'set', ex: id, i: r, rest: k < b.ex.length - 1 ? b.between : b.rest, group: b.label, info: b.info });
+          if (EX(id).sets[r] && useSet(EX(id), r)) steps.push({ type: 'set', ex: id, i: r, rest: k < b.ex.length - 1 ? b.between : b.rest, group: b.label, info: b.info });
         });
       }
     });
@@ -211,6 +213,46 @@
     const hint = v ? (fromLast ? 'La usaste la última vez. ' : '') + `Vuelve a «${ex.vlabel || 'normal'}» cuando te encuentres bien.`
       : ex.variants.map(o => `Cambia a «${o.short}» ${o.when}.`).join(' ');
     return `<div class="opts var" role="group" aria-label="Variante">${opts}</div><p class="muted">${hint}</p>`;
+  }
+
+  // «Ejercicio 5 de 5 · Superserie con Curl de bíceps»
+  function exPos(step) {
+    const d = DAY(S.active.day), all = dayEx(d), n = all.indexOf(step.ex) + 1;
+    const b = d.blocks.find(x => typeof x !== 'string' && x.ex.includes(step.ex));
+    const mates = b ? b.ex.filter(x => x !== step.ex).map(exShort).join(' y ') : '';
+    return `Ejercicio ${n} de ${all.length}` + (b ? ` · ${b.label} con ${mates}` : '');
+  }
+  const dayList = d => '<ol class="daylist">' + d.blocks.map(b => typeof b === 'string' ? `<li>${exShort(b)}</li>`
+    : b.ex.map((id, k) => `<li>${exShort(id)}${k ? '' : ` <span class="chip soft">${b.label.toLowerCase()} con ${b.ex.slice(1).map(exShort).join(' y ')}</span>`}</li>`).join('')).join('') + '</ol>';
+
+  /* ---------- imagen de la máquina ---------- */
+  // Al empezar cada ejercicio: tu foto de la máquina si la has hecho; si no, la imagen del vídeo del entrenador.
+  // Las fotos se guardan reducidas en este móvil (clave aparte para no reescribirlas en cada guardado).
+  const PKEY = 'entreno.fotos';
+  let PH = (() => { try { return JSON.parse(localStorage.getItem(PKEY) || '{}'); } catch (e) { return {}; } })();
+  const savePhotos = () => { try { localStorage.setItem(PKEY, JSON.stringify(PH)); return true; } catch (e) { return false; } };
+  const thumbOf = url => { const id = ytId(url); return id ? 'https://i.ytimg.com/vi/' + id + '/hqdefault.jpg' : null; };
+  let photoKey = null;
+  const phin = document.createElement('input');
+  phin.type = 'file'; phin.accept = 'image/*'; phin.setAttribute('capture', 'environment'); phin.hidden = true; phin.id = 'phin';
+  document.body.appendChild(phin);
+  function machineImg(ex) {
+    const k = gearKey(ex.id, ex.vv && ex.vv.id), own = PH[k], src = own || thumbOf(ex.url);
+    const canPhoto = EX(ex.id).sets.some(x => x.w != null);
+    if (!src && !canPhoto) return '';
+    return `<figure class="mimg ${own ? 'own' : ''}">${src ? `<img src="${src}" alt="${own ? 'Tu foto de la máquina' : 'Imagen del vídeo del entrenador'}: ${esc(ex.name)}" referrerpolicy="no-referrer">` : ''}
+      <figcaption>${own ? 'Tu foto' : src ? 'Del vídeo del entrenador' : ''}${canPhoto ? `<span><button class="link" data-a="photo" data-k="${k}">📷 ${own ? 'Cambiar foto' : 'Poner mi foto de la máquina'}</button>${own ? `<button class="link" data-a="phdel" data-k="${k}">Quitar</button>` : ''}</span>` : ''}</figcaption></figure>`;
+  }
+  async function shrink(file) {
+    const url = URL.createObjectURL(file);
+    try {
+      const img = await new Promise((ok, ko) => { const i = new Image(); i.onload = () => ok(i); i.onerror = ko; i.src = url; });
+      const sc = Math.min(1, 640 / Math.max(img.naturalWidth, img.naturalHeight));
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.naturalWidth * sc); c.height = Math.round(img.naturalHeight * sc);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      return c.toDataURL('image/jpeg', 0.7);
+    } finally { URL.revokeObjectURL(url); }
   }
 
   /* ---------- ajustes de cada máquina ---------- */
@@ -401,6 +443,8 @@
     const hard = {}; ss.forEach(s => s.logs.forEach(l => { if (l.e === 2) hard[l.ex] = (hard[l.ex] || 0) + 1; }));
     const hk = Object.keys(hard).filter(EX);
     if (hk.length) out.push('Última serie al límite: ' + hk.map(id => `${exShort(id)} (${plural(hard[id], 'vez', 'veces')})`).join(', '));
+    const noWarm = ss.filter(s => s.logs.some(l => EX(l.ex) && hasWarm(EX(l.ex))) && !s.logs.some(l => l.i === 0 && EX(l.ex) && hasWarm(EX(l.ex)))).length;
+    if (noWarm) out.push(`Sin la serie de calentamiento de 20 repeticiones en ${plural(noWarm, 'entreno', 'entrenos')}: hace 4 series por ejercicio`);
     const ups = Object.keys(S.adj).filter(id => S.adj[id] && EX(id));
     if (ups.length) out.push('Pesos ajustados respecto al plan: ' + ups.map(id => `${exShort(id)} ${S.adj[id] > 0 ? '+' : ''}${num(S.adj[id])} kg`).join(', '));
     return out.length ? ['*Para revisar*', ...out.map(x => '• ' + x)] : [];
@@ -782,6 +826,7 @@
     const d = DAY(view.day);
     return `<header class="bar"><button class="icon" data-a="go" data-v="home" aria-label="Volver">←</button><span>${d.name} · ${d.weekday}</span><span></span></header>
       <section class="card"><h2>Antes de empezar</h2>
+      <p class="lbl">Hoy toca</p>${dayList(d)}
       <ul class="checks"><li>He comido hace entre 60 y 90 minutos.</li><li>No he tomado café.</li><li>Me encuentro bien: sin dolor abdominal, hinchazón fuerte ni fiebre.</li></ul>
       <p class="callout"><b>Respiración en todo el entreno:</b> suelta el aire al hacer la fuerza y cógelo al volver. Nunca aguantes el aire: así no sube la presión en el abdomen.</p>
       <button class="btn primary big" data-a="start" data-day="${d.id}">Todo bien, empezar</button>
@@ -825,12 +870,14 @@
       (last.e != null ? ' · fue ' + EFF_TXT[last.e] : '') +
       (last.st === 'low' ? ' — te quedaste por debajo: si hoy tampoco sale limpio, baja un escalón.' : '');
     const vid = ex.vv ? ex.vv.id : null, gTop = gearShown(ex.id, vid);
-    const running = timed && T && T.run, fl = feelFlag(ex.id, step.i === 0);
+    const first = !S.active.logs.some(l => l.ex === step.ex);
+    const running = timed && T && T.run, fl = feelFlag(ex.id, first);
     return `<section class="stage">
-      ${step.group ? `<p class="eyebrow">${step.group}</p>` : ''}
+      <p class="eyebrow">${exPos(step)}</p>
       <h1>${ex.name}</h1>
       <p class="pill ${hasWarm(ex) && step.i === 0 ? 'soft' : ''}">${setLabel(ex, step.i)}</p>
       ${varPicker(step.ex)}
+      ${first ? machineImg(ex) : ''}
       ${gTop ? gearLine(ex.id, vid, '') : ''}
       <div class="target">${timed ? `<div><b id="tt">${running ? clock((T.endAt - Date.now()) / 1000) : set.secs}</b><span>${running ? 'aguanta' : 'segundos'}</span></div>`
         : `<div><b>${set.reps}</b><span>repeticiones</span></div>${tw != null ? `<div><b>${kg(tw).replace(' kg', '')}</b><span>kg ${ex.unit ? '· ' + ex.unit : ''}</span></div>` : ''}`}</div>
@@ -881,11 +928,13 @@
   function vRest() {
     const a = S.active, step = a.steps[a.i], ex = exV(step.ex), set = ex.sets[step.i], tw = targetW(ex, step.i);
     const prev = a.steps[a.i - 1], g = prev.ex !== step.ex ? gearOf(step.ex, ex.vv && ex.vv.id) : '';
+    const fresh = prev.ex !== step.ex && !a.logs.some(l => l.ex === step.ex);
     const ask = canNotify && S.settings.notif == null && Notification.permission !== 'denied';
     return `<section class="stage center"><p class="eyebrow">Descanso · ${a.rest.min === a.rest.max ? a.rest.max : a.rest.min + '-' + a.rest.max} segundos</p>
       <div class="dial" id="dial"><div><b id="rt">${clock(a.rest.max)}</b><span id="rs">Respira lento por la nariz</span></div></div>
       <div class="next"><p class="eyebrow">Siguiente</p><h2>${prev.ex !== step.ex ? ex.name + ' · ' : ''}${setLabel(ex, step.i)}</h2>
       <p class="big-line">${set.secs != null ? set.secs + ' segundos' : set.reps + ' repeticiones' + (tw != null ? ' × ' + kg(tw) : '')}</p>
+      ${fresh ? machineImg(ex) : ''}
       ${g ? `<p class="gear-next"><span aria-hidden="true">🔧</span> ${esc(g)}</p>` : ''}</div></section>
       ${ask ? `<section class="card ask"><p><b>¿Te aviso si sales de la app?</b> Si durante el descanso miras otra cosa, te llegará una notificación cuando toque la siguiente serie.</p>
         <div class="row"><button class="btn ghost" data-a="notifno">No, gracias</button><button class="btn primary" data-a="notifyes">Activar</button></div></section>` : ''}
@@ -1008,6 +1057,7 @@
       <section class="card"><h2>Reglas del entrenador</h2>${P.rules.map(r => `<p><b>${r[0]}.</b> ${r[1]}</p>`).join('')}
         <p class="callout"><b>Señal de parar:</b> ${P.stop}</p></section>
       <section class="card"><h2>Ajustes</h2>${tog('sound', 'Sonido al acabar el descanso')}${tog('vib', 'Vibración')}${tog('voice', 'Voz: guía la respiración y cuenta repeticiones')}
+        ${tog('warmSet', 'Serie de calentamiento de 20 repeticiones en cada ejercicio')}<p class="muted">Sin ella, cada ejercicio son 4 series. El cambio vale a partir del siguiente entreno.</p>
         ${canNotify ? `<label class="toggle"><span>Aviso si sales de la app durante el descanso</span><input type="checkbox" data-set="notif" ${notifOn() ? 'checked' : ''}></label>
           ${Notification.permission === 'denied' ? '<p class="muted">El navegador tiene bloqueadas las notificaciones de esta app. Actívalas en los permisos del sitio (el icono junto a la dirección) o en los ajustes de la app del móvil.</p>' : ''}` : ''}
         <label class="toggle"><span>Segundos por estiramiento</span><select data-set="stretch">${[15, 20, 25, 30].map(n => `<option ${st.stretch === n ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
@@ -1036,6 +1086,7 @@
     app.querySelectorAll('[data-fig]').forEach(n => stops.push(window.Anim.mount(n, n.dataset.fig, view.guide ? { on: onGuide, delay: 3 } : null)));
     announce();
     app.querySelectorAll('[data-chart]').forEach(initChart);
+    app.querySelectorAll('.mimg img').forEach(im => im.addEventListener('error', () => im.remove()));
     const inGym = view.name === 'session' || view.name === 'warm' || view.name === 'stretch';
     keepAwake(inGym);
     if (document.getElementById('dial')) armRest(); else disarmRest();
@@ -1149,6 +1200,8 @@
     video: d => { view.video = d.ex || null; render(true); },
     gearedit: d => { view.gear = d.k; render(true); const i = document.getElementById('gearin'); if (i) i.focus(); },
     gearcancel: () => { view.gear = null; render(true); },
+    photo: d => { photoKey = d.k; phin.value = ''; phin.click(); },
+    phdel: d => { if (!confirm('¿Quitar tu foto de esta máquina? Volverá a salir la imagen del vídeo.')) return; delete PH[d.k]; savePhotos(); render(true); },
     gearsave: d => {
       const i = document.getElementById('gearin'), v = i ? i.value.trim().slice(0, 120) : '';
       S.gear = S.gear || {};
@@ -1229,6 +1282,7 @@
       if (document.getElementById('mfull').checked) dayEx(DAY(d.day)).forEach(id => {
         const ex = EX(id);
         ex.sets.forEach((s, i) => {
+          if (!useSet(ex, i)) return;
           const tw = targetW(ex, i), l = { ex: id, i, at: ts, st: 'ok' };
           if (s.secs != null) { l.secs = s.secs; l.ts = s.secs; } else { l.reps = s.reps; l.tr = s.reps; if (tw != null) { l.w = tw; l.tw = tw; } }
           logs.push(l);
@@ -1244,7 +1298,7 @@
     export: async () => {
       // .txt para que el menú de compartir del móvil lo acepte (Drive, correo, WhatsApp…); dentro va el histórico en JSON
       const name = 'entreno-copia-' + new Date().toISOString().slice(0, 10) + '.txt';
-      const file = new File([JSON.stringify(S, null, 1)], name, { type: 'text/plain' });
+      const file = new File([JSON.stringify(Object.keys(PH).length ? Object.assign({}, S, { fotos: PH }) : S, null, 1)], name, { type: 'text/plain' });
       let shared = false;
       if (navigator.canShare && navigator.canShare({ files: [file] })) {
         try { await navigator.share({ files: [file], title: 'Copia de Mi entreno' }); shared = true; }
@@ -1303,11 +1357,20 @@
       return;
     }
     if (t.dataset.set) { S.settings[t.dataset.set] = t.type === 'checkbox' ? t.checked : +t.value; save(); }
+    if (t.id === 'phin' && t.files[0] && photoKey) {
+      const k = photoKey;
+      shrink(t.files[0]).then(url => {
+        PH[k] = url;
+        if (!savePhotos()) { delete PH[k]; alert('No queda sitio en el móvil para más fotos de la app.'); }
+        render(true);
+      }).catch(() => alert('No se ha podido leer la foto.'));
+    }
     if (t.id === 'imp' && t.files[0]) t.files[0].text().then(txt => {
       try {
         const d = JSON.parse(txt);
         if (!Array.isArray(d.sessions)) throw 0;
         if (confirm('Se sustituirá el histórico de este móvil por el de la copia (' + d.sessions.length + ' entrenos). ¿Continuar?')) {
+          if (d.fotos) { PH = d.fotos; savePhotos(); delete d.fotos; }
           localStorage.setItem(KEY, JSON.stringify(d)); S = load(); render();
         }
       } catch (err) { alert('Ese archivo no es una copia válida.'); }

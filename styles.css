@@ -267,6 +267,9 @@ button.video { background: none; border: 0; font: inherit; font-weight: 650; col
 .sup-g figcaption { font-size: .82rem; margin-top: 4px; line-height: 1.3; }
 .sup-g figcaption span { display: block; color: var(--muted); }
 .sup-t { font-size: .88rem; margin: 8px 0 0; }
+.target .today { outline: 2px solid var(--warn); outline-offset: -2px; }
+.target .today em { display: block; font-style: normal; font-weight: 650; color: var(--text); font-size: .78rem; }
+.chip.way { background: color-mix(in srgb, var(--warn) 18%, transparent); }
 .mimg { margin: 8px 0 4px; }
 .mimg img { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 12px; background: var(--line); }
 .mimg.own img { aspect-ratio: 4 / 3; }

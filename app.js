@@ -56,6 +56,33 @@
     return null;
   }
   const mark = st => st === 'low' ? '▼' : st === 'up' ? '▲' : '✓';
+
+  /* ---------- objetivo de hoy ---------- */
+  // Regla del entrenador: si no salen las repeticiones limpias, la vez siguiente un escalón menos en esa serie.
+  // Desde ahí se vuelve al peso del plan escalón a escalón. Si la última vez hubo molestia en el ejercicio, se repite el peso.
+  // El estado de cada serie (st) se sigue midiendo contra el plan; dt/dst guardan el objetivo de hoy y si se cumplió.
+  const r2 = n => Math.round(n * 100) / 100;
+  function lastWith(exId, i) {
+    for (let k = S.sessions.length - 1; k >= 0; k--) { const l = S.sessions[k].logs.find(x => x.ex === exId && x.i === i); if (l) return { l, s: S.sessions[k] }; }
+    return null;
+  }
+  function todayT(ex, i) {
+    const set = ex.sets[i], tw = targetW(ex, i);
+    if (tw == null || set.secs != null || (hasWarm(ex) && i === 0)) return null;
+    const f = lastWith(ex.id, i);
+    if (!f || f.l.w == null || f.l.reps == null) return null;
+    const L = f.l, step = ex.step || 1, pain = !!(f.s.feel && f.s.feel.where && f.s.feel.where.includes(ex.id));
+    let w, why;
+    if (L.reps < (L.tr || set.reps)) { w = Math.max(0, r2(Math.min(L.w - step, tw))); why = 'down'; }
+    else if (L.w < tw) { if (pain) { w = L.w; why = 'hold'; } else { w = r2(Math.min(L.w + step, tw)); why = 'up'; } }
+    else return null;
+    return w < tw ? { w, why, last: L } : null;
+  }
+  const goalW = (ex, i) => { const t = todayT(ex, i); return t ? t.w : targetW(ex, i); };
+  // por debajo del plan pero con el objetivo de hoy cumplido: va camino del plan
+  const isWay = l => l.st === 'low' && l.dt != null && l.dst !== 'low';
+  const markL = l => isWay(l) ? '↗' : mark(l.st);
+  const chipL = l => isWay(l) ? 'way' : l.st;
   const logText = l => l.secs != null ? l.secs + ' s' : (l.w != null ? kg(l.w) + ' × ' : '') + l.reps;
 
   /* ---------- sonido, vibración, pantalla encendida ---------- */
@@ -95,7 +122,7 @@
   const SIDES = { remomancuerna: 'switch', birddog: 'alt' };   // switch: una serie por lado · alt: alternando lados
   let lastSaid = '';
   function setSpeech(step, withName) {
-    const ex = exV(step.ex), set = ex.sets[step.i], tw = targetW(ex, step.i);
+    const ex = exV(step.ex), set = ex.sets[step.i], tw = goalW(ex, step.i);
     return (withName ? ex.name.replace(/\s*\(.*?\)/g, '') + '. ' : '') + setLabel(ex, step.i) + '. ' +
       (set.secs != null ? set.secs + ' segundos' : set.reps + ' repeticiones' + (tw != null ? ' con ' + String(tw).replace('.', ' coma ') + ' kilos' : '')) + '.';
   }
@@ -331,7 +358,7 @@
     try { const reg = await swReg(); if (reg) (await reg.getNotifications({ tag: 'rest' })).forEach(n => n.close()); } catch (e) { /* nada */ }
   }
   function nextTxt(step) {
-    const ex = exV(step.ex), set = ex.sets[step.i], tw = targetW(ex, step.i);
+    const ex = exV(step.ex), set = ex.sets[step.i], tw = goalW(ex, step.i);
     return ex.name.replace(/\s*\(.*?\)/g, '') + ' · ' + setLabel(ex, step.i) + ' · ' +
       (set.secs != null ? set.secs + ' s' : set.reps + ' repeticiones' + (tw != null ? ' × ' + kg(tw) : ''));
   }
@@ -446,7 +473,8 @@
       const ex = EX(id); if (!ex) return;
       const ls = s.logs.filter(l => l.ex === id && !(hasWarm(ex) && l.i === 0)).sort((a, b) => a.i - b.i);
       if (!ls.length) return;
-      const parts = ls.map(l => setTxt(l.w, l.reps, l.secs) + (l.st === 'low' ? `▼ (obj. ${setTxt(l.tw, l.tr, l.ts)})` : l.st === 'up' ? '▲' : ''));
+      const parts = ls.map(l => setTxt(l.w, l.reps, l.secs) + (isWay(l) ? `↗ (plan ${setTxt(l.tw, l.tr)})`
+        : l.st === 'low' ? `▼ (obj. ${l.dt != null ? setTxt(l.dt, l.tr) + ', plan ' + setTxt(l.tw, l.tr) : setTxt(l.tw, l.tr, l.ts)})` : l.st === 'up' ? '▲' : ''));
       const top = ls.find(l => l.i === ex.sets.length - 1 && l.e != null);
       lines.push(`• ${varOf(s, id) ? varOf(s, id).name : exShort(id)}: ${parts.join(' · ')}${ls.some(l => l.st === 'low') ? '' : ' ✓'}${top ? ' · última serie ' + EFF_TXT[top.e] : ''}`);
     });
@@ -460,7 +488,9 @@
       out.push('Entrenos: ' + [c[0] ? c[0] + ' sin molestias' : '', c[1] ? c[1] + ' con molestia leve' : '',
         c[2] ? plural(c[2], 'parado', 'parados') + ' por molestias' : ''].filter(Boolean).join(', '));
     }
-    const low = {}; ss.forEach(s => s.logs.forEach(l => { if (l.st === 'low') low[l.ex] = (low[l.ex] || 0) + 1; }));
+    const low = {}, way = {}; ss.forEach(s => s.logs.forEach(l => { const o = isWay(l) ? way : l.st === 'low' ? low : null; if (o) o[l.ex] = (o[l.ex] || 0) + 1; }));
+    const ways = Object.keys(way).filter(EX);
+    if (ways.length) out.push('Camino del plan (objetivo del día cumplido): ' + ways.map(id => `${exShort(id)} (${plural(way[id], 'serie', 'series')})`).join(', '));
     const lows = Object.keys(low).filter(EX);
     if (lows.length) out.push('Por debajo del plan: ' + lows.map(id => `${exShort(id)} (${plural(low[id], 'serie', 'series')})`).join(', '));
     const hard = {}; ss.forEach(s => s.logs.forEach(l => { if (l.e === 2) hard[l.ex] = (hard[l.ex] || 0) + 1; }));
@@ -483,7 +513,8 @@
         `Días hechos: ${done.length} de ${P.days.length}${miss.length ? ' · ' + (mode === 'prev' ? 'sin hacer: ' : 'pendiente: ') + miss.map(d => d.name).join(', ') : ''}`);
       L.push(...extraLines(ss, from, to, false));
       if (!ss.length) return L.concat('', 'No hay entrenos apuntados esta semana.').join('\n');
-      L.push('Pesos en kg (peso×repeticiones). ✓ cumplido · ▼ por debajo · ▲ por encima');
+      L.push('Pesos en kg (peso×repeticiones). ✓ cumplido · ▼ por debajo · ▲ por encima' +
+        (ss.some(s => s.logs.some(isWay)) ? ' · ↗ por debajo del plan, pero cumple el objetivo del día (vuelve al plan escalón a escalón)' : ''));
       ss.forEach(s => L.push('', sessionBlock(s)));
       L.push('', ...reviewLines(ss));
     } else {
@@ -501,7 +532,7 @@
         const ex = EX(id), fi = ex.sets.length - 1;
         if (ex.sets[fi].w == null && ex.sets[fi].secs == null) return;
         const ls = ss.map(s => s.logs.find(l => l.ex === id && l.i === fi)).filter(Boolean);
-        if (ls.length) evo.push(`• ${exShort(id)}: ${ls.map(l => (l.secs != null ? l.secs + ' s' : num(l.w)) + (l.st === 'low' ? '▼' : '') + (l.e === 2 ? ' (al límite)' : '')).join(' → ')}`);
+        if (ls.length) evo.push(`• ${exShort(id)}: ${ls.map(l => (l.secs != null ? l.secs + ' s' : num(l.w)) + (isWay(l) ? '↗' : l.st === 'low' ? '▼' : '') + (l.e === 2 ? ' (al límite)' : '')).join(' → ')}`);
       }));
       if (evo.length) L.push('', '*Evolución de la última serie* (kg; plancha en segundos; ▼ por debajo del plan)', ...evo);
       const hits = {}; ss.forEach(s => ((s.feel && s.feel.where) || []).forEach(id => { hits[id] = (hits[id] || 0) + 1; }));
@@ -536,11 +567,11 @@
     if (ex.sets[fi].w == null && !timed) return null;
     const pts = S.sessions.map(s => ({ s, l: s.logs.find(l => l.ex === id && l.i === fi) }))
       .filter(x => x.l && (timed ? x.l.secs != null : x.l.w != null)).slice(-12)
-      .map(({ s, l }) => ({ t: s.date, v: timed ? l.secs : l.w, tv: timed ? l.ts : l.tw, reps: l.reps, st: l.st, vr: l.v, e: l.e }));
+      .map(({ s, l }) => ({ t: s.date, v: timed ? l.secs : l.w, tv: timed ? l.ts : l.tw, reps: l.reps, st: isWay(l) ? 'way' : l.st, vr: l.v, e: l.e, dt: l.dt }));
     return { id, pts, timed };
   }
   const fmtV = (d, v) => v == null ? '–' : d.timed ? v + ' s' : kg(v);
-  const stTxt = st => st === 'low' ? '▼ por debajo' : st === 'up' ? '▲ por encima' : '✓ cumplido';
+  const stTxt = st => st === 'low' ? '▼ por debajo' : st === 'way' ? '↗ objetivo del día cumplido' : st === 'up' ? '▲ por encima' : '✓ cumplido';
   const stEff = p => stTxt(p.st) + (p.e != null ? ' · ' + EFF_TXT[p.e] : '');
   function chartHtml(id) {
     const d = chartData(id);
@@ -886,12 +917,14 @@
   }
 
   function vSet(step) {
-    const ex = exV(step.ex), set = ex.sets[step.i], tw = targetW(ex, step.i), last = lastLog(ex.id, step.i);
+    const ex = exV(step.ex), set = ex.sets[step.i], pw = targetW(ex, step.i), last = lastLog(ex.id, step.i), tt = todayT(ex, step.i), tw = tt ? tt.w : pw;
     const timed = set.secs != null;
     let lastTxt = 'Primera vez: empieza con lo que marca el plan.';
-    if (last) lastTxt = `Última vez (${dShort(last.at)}): <b>${logText(last)}</b> ${mark(last.st)}` +
+    if (last) lastTxt = `Última vez (${dShort(last.at)}): <b>${logText(last)}</b> ${markL(last)}` +
       (last.e != null ? ' · fue ' + EFF_TXT[last.e] : '') +
-      (last.st === 'low' ? ' — te quedaste por debajo: si hoy tampoco sale limpio, baja un escalón.' : '');
+      (tt ? { down: ' — no salieron las repeticiones: hoy un escalón menos, como marca tu entrenador.',
+        up: ` — hoy subes un escalón, camino del plan (${kg(pw)}).`, hold: ' — notaste molestia en este ejercicio: hoy repite el peso.' }[tt.why]
+        : last.st === 'low' && pw != null ? ' — hoy vuelves al peso del plan.' : '');
     const vid = ex.vv ? ex.vv.id : null, gTop = gearShown(ex.id, vid);
     const first = !S.active.logs.some(l => l.ex === step.ex), pv = S.active.steps[S.active.i - 1];
     const sb = !(pv && pv.type === 'set' && pv.rest) ? supStart(S.active, step) : null;
@@ -905,7 +938,7 @@
       ${first ? machineImg(ex) : ''}
       ${gTop ? gearLine(ex.id, vid, '') : ''}
       <div class="target">${timed ? `<div><b id="tt">${running ? clock((T.endAt - Date.now()) / 1000) : set.secs}</b><span>${running ? 'aguanta' : 'segundos'}</span></div>`
-        : `<div><b>${set.reps}</b><span>repeticiones</span></div>${tw != null ? `<div><b>${kg(tw).replace(' kg', '')}</b><span>kg ${ex.unit ? '· ' + ex.unit : ''}</span></div>` : ''}`}</div>
+        : `<div><b>${set.reps}</b><span>repeticiones</span></div>${tw != null ? `<div class="${tt ? 'today' : ''}"><b>${kg(tw).replace(' kg', '')}</b><span>kg ${ex.unit ? '· ' + ex.unit : ''}${tt ? `<em>objetivo de hoy · plan ${num(pw)}</em>` : ''}</span></div>` : ''}`}</div>
       ${ex.perSide ? `<p class="muted center">${ex.perSide}</p>` : ''}
       <p class="last">${lastTxt}</p>
       ${fl ? `<p class="callout">${fl}</p>` : ''}
@@ -926,18 +959,21 @@
   }
 
   function vLog(step) {
-    const ex = exV(step.ex), set = ex.sets[step.i], tw = targetW(ex, step.i), L = view.log;
+    const ex = exV(step.ex), set = ex.sets[step.i], tw = targetW(ex, step.i), L = view.log, tt = todayT(ex, step.i);
     const stepper = (k, label, val) => `<div class="stepper"><span>${label}</span><div><button data-a="adj" data-k="${k}" data-d="-1" aria-label="Menos">−</button>
       <b>${val}</b><button data-a="adj" data-k="${k}" data-d="1" aria-label="Más">+</button></div></div>`;
-    const st = status(L, set, tw);
-    const msg = { ok: '✓ Cumplido', up: '▲ Por encima del plan', low: '▼ Por debajo del plan' }[st];
+    const st = status(L, set, tw), dst = tt ? status(L, set, tt.w) : st;
+    const msg = tt ? { ok: '✓ Objetivo de hoy cumplido', up: '▲ Por encima del objetivo de hoy', low: '▼ Por debajo del objetivo de hoy' }[dst]
+      : { ok: '✓ Cumplido', up: '▲ Por encima del plan', low: '▼ Por debajo del plan' }[st];
+    const planTxt = !tt ? '' : st !== 'low' ? '<p class="muted center">¡Llegas al peso del plan!</p>'
+      : `<p class="muted center">Plan: ${kg(tw)} × ${set.reps}${dst !== 'low' ? ' · vas camino de él' : ''}</p>`;
     return `<section class="stage"><p class="eyebrow">${setLabel(ex, step.i)}</p><h1>${ex.name}</h1>
-      <p class="muted">¿Qué has hecho de verdad? Objetivo: ${set.secs != null ? set.secs + ' s' : (tw != null ? kg(tw) + ' × ' : '') + set.reps + ' repeticiones'}</p>
+      <p class="muted">¿Qué has hecho de verdad? ${tt ? 'Objetivo de hoy' : 'Objetivo'}: ${set.secs != null ? set.secs + ' s' : (tw != null ? kg(tt ? tt.w : tw) + ' × ' : '') + set.reps + ' repeticiones'}${tt ? ' (plan ' + kg(tw) + ')' : ''}</p>
       ${L.w != null ? stepper('w', 'Peso', kg(L.w)) : ''}
       ${L.reps != null ? stepper('reps', 'Repeticiones', L.reps) : ''}
       ${L.secs != null ? stepper('secs', 'Segundos', L.secs) : ''}
-      <p class="status ${st}">${msg}</p>
-      ${st === 'low' ? '<p class="muted center">No pasa nada: la técnica manda sobre el peso. La próxima vez, un escalón menos en esta serie.</p>' : ''}
+      <p class="status ${dst}">${msg}</p>${planTxt}
+      ${dst === 'low' ? '<p class="muted center">No pasa nada: la técnica manda sobre el peso. La próxima vez, un escalón menos en esta serie.</p>' : ''}
       ${isTop(ex, step.i) ? `<p class="lbl">¿Cómo fue esta última serie?</p><div class="opts eff" role="group" aria-label="Esfuerzo de la última serie">${EFF.map((l, v) =>
         `<button class="opt ${L.e === v ? 'on' + (v === 2 ? ' mid' : '') : ''}" data-a="effort" data-v="${v}" aria-pressed="${L.e === v}">${l}<small>${EFF_SUB[v]}</small></button>`).join('')}</div>
         ${L.e === 2 ? '<p class="muted center">Al límite es cuando más cuesta no aguantar el aire. Mientras salga así, la app no te propondrá subir peso.</p>' : ''}` : ''}
@@ -951,7 +987,7 @@
   }
 
   function vRest() {
-    const a = S.active, step = a.steps[a.i], ex = exV(step.ex), set = ex.sets[step.i], tw = targetW(ex, step.i);
+    const a = S.active, step = a.steps[a.i], ex = exV(step.ex), set = ex.sets[step.i], tw = goalW(ex, step.i);
     const prev = a.steps[a.i - 1], g = prev.ex !== step.ex ? gearOf(step.ex, ex.vv && ex.vv.id) : '';
     const sb = supStart(a, step), fresh = !sb && prev.ex !== step.ex && !a.logs.some(l => l.ex === step.ex);
     const ask = canNotify && S.settings.notif == null && Notification.permission !== 'denied';
@@ -1008,9 +1044,9 @@
   }
   function vSummary() {
     const a = S.active, d = DAY(a.day), sug = view.sug || (view.sug = {});
-    const low = a.logs.filter(l => l.st === 'low').length;
+    const low = a.logs.filter(l => l.st === 'low' && !isWay(l)).length, way = a.logs.filter(isWay).length;
     let h = `<header class="top"><p class="eyebrow">${d.name} · ${d.weekday}</p><h1>${a.stopped ? 'Entreno parado' : 'Entreno terminado'}</h1>
-      <p class="muted">${a.logs.length} series registradas · ${durOf(a)} min${low ? ' · ' + low + ' por debajo del plan' : a.logs.length ? ' · todo cumplido' : ''}</p></header>`;
+      <p class="muted">${a.logs.length} series registradas · ${durOf(a)} min${low ? ' · ' + low + ' por debajo del plan' : ''}${way ? ' · ' + way + ' camino del plan' : ''}${!low && !way && a.logs.length ? ' · todo cumplido' : ''}</p></header>`;
     suggestions(a).forEach(({ ex, cur, hold }) => {
       const s1 = ex.step, s2 = ex.step === 1 ? 2 : ex.step === 2 ? 4 : ex.step === 2.5 ? 5 : 10;
       if (hold && !sug[ex.id]) {
@@ -1030,7 +1066,7 @@
       ${need ? '<p class="status low">Marca la molestia abdominal, aunque sea «Ninguna».</p>' : ''}</section>`;
     h += '<section class="card"><h2>Resumen</h2>' + dayEx(d).map(id => {
       const ls = a.logs.filter(l => l.ex === id);
-      return ls.length ? `<div class="hrow"><b>${EX(id).name}</b><p>${ls.map(l => `<span class="chip ${l.st}">${setShort(EX(id), l.i)} ${logText(l)} ${mark(l.st)}</span>${effChip(l)}`).join('')}</p></div>` : '';
+      return ls.length ? `<div class="hrow"><b>${EX(id).name}</b><p>${ls.map(l => `<span class="chip ${chipL(l)}">${setShort(EX(id), l.i)} ${logText(l)} ${markL(l)}</span>${effChip(l)}`).join('')}</p></div>` : '';
     }).join('') + `<label class="lbl" for="sdt">Fecha y hora de inicio</label><input type="datetime-local" id="sdt" value="${a.sdt || toInput(a.t0)}">
       <label class="lbl" for="smin">Duración (minutos)</label><input type="text" class="fld" id="smin" inputmode="numeric" value="${a.smin || durOf(a)}">
       <label class="lbl" for="note">Nota del día (opcional)</label><textarea id="note" rows="2" placeholder="Algo más que quieras recordar…">${esc(a.note || '')}</textarea></section>
@@ -1039,7 +1075,7 @@
   }
 
   function vHist() {
-    let h = '<header class="top"><h1>Histórico</h1><p class="muted">Últimas sesiones de cada ejercicio. ✓ cumplido · ▼ por debajo · ▲ por encima</p></header>';
+    let h = '<header class="top"><h1>Histórico</h1><p class="muted">Últimas sesiones de cada ejercicio. ✓ cumplido · ↗ objetivo del día cumplido, camino del plan · ▼ por debajo · ▲ por encima</p></header>';
     if (S.sessions.length) h += '<button class="btn ghost" data-a="report" data-from="hist">Resumen para el entrenador</button>' + vCal();
     h += bodySection();
     if (!S.sessions.length) h += '<section class="card"><p>Todavía no hay entrenos guardados. Cuando termines el primero, aparecerá aquí.</p></section>';
@@ -1067,7 +1103,7 @@
             <span><button data-a="tune" data-ex="${id}" data-d="-1" aria-label="Bajar objetivo">−</button><button data-a="tune" data-ex="${id}" data-d="1" aria-label="Subir objetivo">+</button></span></div>` : ''}
           ${chartHtml(id)}
           ${rows.length ? rows.map(s => `<div class="hrow"><b>${dShort(s.date)}</b><p>${s.logs.filter(l => l.ex === id).map(l =>
-            `<span class="chip ${l.st}">${setShort(ex, l.i)} ${logText(l)} ${mark(l.st)}</span>${effChip(l)}`).join('')}${varOf(s, id) ? `<span class="chip soft">${cap(varOf(s, id).short)}</span>` : ''}${s.feel && s.feel.where && s.feel.where.includes(id) ? '<span class="chip mid">⚠ molestia</span>' : ''}</p></div>`).join('') : '<p class="muted">Sin registros.</p>'}</section>`;
+            `<span class="chip ${chipL(l)}">${setShort(ex, l.i)} ${logText(l)} ${markL(l)}</span>${effChip(l)}`).join('')}${varOf(s, id) ? `<span class="chip soft">${cap(varOf(s, id).short)}</span>` : ''}${s.feel && s.feel.where && s.feel.where.includes(id) ? '<span class="chip mid">⚠ molestia</span>' : ''}</p></div>`).join('') : '<p class="muted">Sin registros.</p>'}</section>`;
       });
     });
     const notes = S.sessions.filter(s => s.note || s.stopped).slice(-8).reverse();
@@ -1149,7 +1185,7 @@
     if (left <= 0) { beep(2); say('Tiempo'); openLog(T.total); }
   }
   function openLog(secs) {
-    const step = S.active.steps[S.active.i], ex = EX(step.ex), set = ex.sets[step.i], tw = targetW(ex, step.i);
+    const step = S.active.steps[S.active.i], ex = EX(step.ex), set = ex.sets[step.i], tw = goalW(ex, step.i);
     T = null; view.guide = null; view.video = null; view.sub = 'log';
     view.log = set.secs != null ? { secs: secs != null ? secs : set.secs } : { reps: set.reps, w: tw };
     if (view.log.w == null) delete view.log.w;
@@ -1198,8 +1234,9 @@
     guide: () => { view.guide = { b: '' }; say('Preparado'); render(true); },
     gstop: () => { view.guide = null; hush(); render(true); },
     savelog: () => {
-      const a = S.active, step = a.steps[a.i], ex = EX(step.ex), set = ex.sets[step.i], tw = targetW(ex, step.i), L = view.log;
+      const a = S.active, step = a.steps[a.i], ex = EX(step.ex), set = ex.sets[step.i], tw = targetW(ex, step.i), L = view.log, tt = todayT(ex, step.i);
       const log = { ex: step.ex, i: step.i, at: Date.now(), st: status(L, set, tw) }, vv = curVar(step.ex);
+      if (tt && L.w != null) { log.dt = tt.w; log.dst = status(L, set, tt.w); }
       if (vv) log.v = vv.id;
       if (L.e != null) log.e = L.e;
       if (L.secs != null) { log.secs = L.secs; log.ts = set.secs; } else { log.reps = L.reps; log.tr = set.reps; if (tw != null) { log.w = L.w; log.tw = tw; } }

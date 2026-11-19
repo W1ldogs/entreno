@@ -104,7 +104,7 @@
     if (view.name !== 'session' || !a || a.done || view.sub) return;
     const step = a.steps[a.i];
     if (a.phase === 'rest') {
-      if (lastSaid !== 'r' + a.i) { lastSaid = 'r' + a.i; say('Descansa. ' + (a.rest.min === a.rest.max ? a.rest.max : a.rest.min + ' a ' + a.rest.max) + ' segundos.' + gearSay(a)); }
+      if (lastSaid !== 'r' + a.i) { lastSaid = 'r' + a.i; const sb = supStart(a, a.steps[a.i]); say('Descansa. ' + (a.rest.min === a.rest.max ? a.rest.max : a.rest.min + ' a ' + a.rest.max) + ' segundos.' + (sb ? supSay(sb) : gearSay(a))); }
       return;
     }
     if (step.type !== 'set' || view.guide || (T && T.run) || lastSaid === 's' + a.i) return;
@@ -224,6 +224,29 @@
   }
   const dayList = d => '<ol class="daylist">' + d.blocks.map(b => typeof b === 'string' ? `<li>${exShort(b)}</li>`
     : b.ex.map((id, k) => `<li>${exShort(id)}${k ? '' : ` <span class="chip soft">${b.label.toLowerCase()} con ${b.ex.slice(1).map(exShort).join(' y ')}</span>`}</li>`).join('')).join('') + '</ol>';
+
+  /* ---------- aviso previo de superserie ---------- */
+  // Antes de empezar un bloque de ejercicios alternados se avisa de cuáles son y de que hay que tener preparado todo.
+  const blockOf = (dayId, id) => DAY(dayId).blocks.find(b => typeof b !== 'string' && b.ex.includes(id)) || null;
+  function supStart(a, st) {
+    const b = st && st.type === 'set' ? blockOf(a.day, st.ex) : null;
+    return b && b.ex[0] === st.ex && !a.logs.some(l => b.ex.includes(l.ex)) ? b : null;
+  }
+  const supPrep = b => b.ex.some(id => EX(id).sets.some(x => x.w != null))
+    ? `Prepara ${b.ex.length === 2 ? 'los dos' : 'todos'} antes de empezar: ${b.between ? 'entre uno y otro el descanso es corto' : 'entre uno y otro no hay descanso'}.` : '';
+  function supCard(b) {
+    const exs = b.ex.map(exV);
+    return `<div class="sup" role="note"><p class="sup-h">Ahora viene: ${b.label} · ${exs.length} ejercicios alternados</p>
+      <div class="sup-g">${exs.map((e, k) => {
+        const vid = e.vv && e.vv.id, src = PH[gearKey(e.id, vid)] || thumbOf(e.url), g = gearOf(e.id, vid);
+        return `<figure>${src ? `<img src="${src}" alt="" referrerpolicy="no-referrer">` : ''}<figcaption><b>${k + 1}. ${esc(e.name.replace(/\s*\(.*?\)/g, ''))}</b>${g ? `<span>🔧 ${esc(g)}</span>` : ''}</figcaption></figure>`;
+      }).join('')}</div>
+      <p class="sup-t">${supPrep(b)} ${b.info || ''}</p></div>`;
+  }
+  function supSay(b) {
+    const gs = b.ex.map(id => { const e = exV(id), g = gearOf(id, e.vv && e.vv.id); return g ? ' Para ' + exShort(id) + ': ' + g + '.' : ''; }).join('');
+    return ` Atención, ahora viene: ${b.label.toLowerCase()}. ${b.ex.map(exShort).join(' y ')}, alternando. ${supPrep(b)}${gs}`;
+  }
 
   /* ---------- imagen de la máquina ---------- */
   // Al empezar cada ejercicio: tu foto de la máquina si la has hecho; si no, la imagen del vídeo del entrenador.
@@ -870,10 +893,12 @@
       (last.e != null ? ' · fue ' + EFF_TXT[last.e] : '') +
       (last.st === 'low' ? ' — te quedaste por debajo: si hoy tampoco sale limpio, baja un escalón.' : '');
     const vid = ex.vv ? ex.vv.id : null, gTop = gearShown(ex.id, vid);
-    const first = !S.active.logs.some(l => l.ex === step.ex);
+    const first = !S.active.logs.some(l => l.ex === step.ex), pv = S.active.steps[S.active.i - 1];
+    const sb = !(pv && pv.type === 'set' && pv.rest) ? supStart(S.active, step) : null;
     const running = timed && T && T.run, fl = feelFlag(ex.id, first);
     return `<section class="stage">
       <p class="eyebrow">${exPos(step)}</p>
+      ${sb ? supCard(sb) : ''}
       <h1>${ex.name}</h1>
       <p class="pill ${hasWarm(ex) && step.i === 0 ? 'soft' : ''}">${setLabel(ex, step.i)}</p>
       ${varPicker(step.ex)}
@@ -928,14 +953,14 @@
   function vRest() {
     const a = S.active, step = a.steps[a.i], ex = exV(step.ex), set = ex.sets[step.i], tw = targetW(ex, step.i);
     const prev = a.steps[a.i - 1], g = prev.ex !== step.ex ? gearOf(step.ex, ex.vv && ex.vv.id) : '';
-    const fresh = prev.ex !== step.ex && !a.logs.some(l => l.ex === step.ex);
+    const sb = supStart(a, step), fresh = !sb && prev.ex !== step.ex && !a.logs.some(l => l.ex === step.ex);
     const ask = canNotify && S.settings.notif == null && Notification.permission !== 'denied';
     return `<section class="stage center"><p class="eyebrow">Descanso · ${a.rest.min === a.rest.max ? a.rest.max : a.rest.min + '-' + a.rest.max} segundos</p>
       <div class="dial" id="dial"><div><b id="rt">${clock(a.rest.max)}</b><span id="rs">Respira lento por la nariz</span></div></div>
       <div class="next"><p class="eyebrow">Siguiente</p><h2>${prev.ex !== step.ex ? ex.name + ' · ' : ''}${setLabel(ex, step.i)}</h2>
       <p class="big-line">${set.secs != null ? set.secs + ' segundos' : set.reps + ' repeticiones' + (tw != null ? ' × ' + kg(tw) : '')}</p>
-      ${fresh ? machineImg(ex) : ''}
-      ${g ? `<p class="gear-next"><span aria-hidden="true">🔧</span> ${esc(g)}</p>` : ''}</div></section>
+      ${sb ? supCard(sb) : fresh ? machineImg(ex) : ''}
+      ${g && !sb ? `<p class="gear-next"><span aria-hidden="true">🔧</span> ${esc(g)}</p>` : ''}</div></section>
       ${ask ? `<section class="card ask"><p><b>¿Te aviso si sales de la app?</b> Si durante el descanso miras otra cosa, te llegará una notificación cuando toque la siguiente serie.</p>
         <div class="row"><button class="btn ghost" data-a="notifno">No, gracias</button><button class="btn primary" data-a="notifyes">Activar</button></div></section>` : ''}
       <footer class="dock"><button class="btn ghost" data-a="rplus">+15 s</button><button class="btn primary" data-a="rskip">Empezar ya</button></footer>`;
@@ -1086,7 +1111,7 @@
     app.querySelectorAll('[data-fig]').forEach(n => stops.push(window.Anim.mount(n, n.dataset.fig, view.guide ? { on: onGuide, delay: 3 } : null)));
     announce();
     app.querySelectorAll('[data-chart]').forEach(initChart);
-    app.querySelectorAll('.mimg img').forEach(im => im.addEventListener('error', () => im.remove()));
+    app.querySelectorAll('.mimg img, .sup img').forEach(im => im.addEventListener('error', () => im.remove()));
     const inGym = view.name === 'session' || view.name === 'warm' || view.name === 'stretch';
     keepAwake(inGym);
     if (document.getElementById('dial')) armRest(); else disarmRest();

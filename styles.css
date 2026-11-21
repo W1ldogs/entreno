@@ -273,6 +273,10 @@ button.video { background: none; border: 0; font: inherit; font-weight: 650; col
 .mimg { margin: 8px 0 4px; }
 .mimg img { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 12px; background: var(--line); }
 .mimg.own img { aspect-ratio: 4 / 3; }
+.mimg.doc img, .sup-g img.doc { object-fit: contain; background: #fff; }
+.mimg.doc img { aspect-ratio: auto; height: auto; max-height: 46vh; }
+.vbtns { display: flex; flex-direction: column; align-items: flex-start; }
+button.video.alt { color: var(--muted); font-weight: 600; }
 .mimg figcaption { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 10px; font-size: .8rem; color: var(--muted); margin-top: 2px; text-align: left; }
 .mimg figcaption span { display: flex; gap: 10px; }
 .daylist { margin: 4px 0 12px; padding-left: 22px; }

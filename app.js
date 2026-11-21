@@ -3,14 +3,14 @@
   const P = window.PLAN, KEY = 'entreno.v1';
   const app = document.getElementById('app');
   Object.keys(P.exercises).forEach(k => { P.exercises[k].id = k; });
-  const DEF = { sessions: [], adj: {}, gear: {}, settings: { sound: true, vib: true, voice: true, stretch: 15, notif: null, warmSet: false }, active: null, warmAt: 0, body: [], backupAt: 0, backupN: 0, backupSnooze: 0 };
+  const DEF = { sessions: [], adj: {}, gear: {}, videos: {}, settings: { sound: true, vib: true, voice: true, stretch: 15, notif: null, warmSet: false }, active: null, warmAt: 0, body: [], backupAt: 0, backupN: 0, backupSnooze: 0 };
 
   /* ---------- estado ---------- */
   let S = load();
   function load() {
     try {
       const d = JSON.parse(localStorage.getItem(KEY) || '{}');
-      return Object.assign({}, DEF, d, { settings: Object.assign({}, DEF.settings, d.settings || {}), gear: Object.assign({}, d.gear || {}) });
+      return Object.assign({}, DEF, d, { settings: Object.assign({}, DEF.settings, d.settings || {}), gear: Object.assign({}, d.gear || {}), videos: Object.assign({}, d.videos || {}) });
     } catch (e) { return JSON.parse(JSON.stringify(DEF)); }
   }
   function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { /* sin almacenamiento */ } }
@@ -202,14 +202,26 @@
   /* ---------- vídeo del entrenador ---------- */
   // Se carga solo al pulsar (ahorra datos y no avisa a YouTube hasta entonces); dominio sin cookies.
   const ytId = url => { const m = /(?:v=|shorts\/|youtu\.be\/|embed\/)([\w-]{11})/.exec(url || ''); return m ? m[1] : null; };
+  // Primero el vídeo corto que mejor lo explica (o el que hayas puesto tú) y, aparte, el del entrenador.
+  const vKey = ex => ex.id + (ex.vv ? ':' + ex.vv.id : '');
+  const vidOpen = id => (view.video || '').split(':')[0] === id;
+  function vids(ex) {
+    const k = vKey(ex), mine = (S.videos || {})[k], sh = (P.shorts || {})[k], out = [];
+    if (mine) out.push({ w: 'm', url: mine, label: 'tu vídeo' });
+    else if (sh) out.push({ w: 's', url: sh.url, label: 'vídeo corto' + (sh.by ? ' · ' + sh.by : '') });
+    if (ex.url) out.push({ w: 'c', url: ex.url, label: 'vídeo del entrenador' });
+    return out.filter(v => ytId(v.url));
+  }
   function videoBlock(ex) {
-    const id = ytId(ex.url);
-    if (!id) return `<a class="video" target="_blank" rel="noopener" href="https://www.youtube.com/results?search_query=${encodeURIComponent(ex.video || ex.name)}">▶ Buscar un vídeo en YouTube</a>`;
-    if (view.video !== ex.id) return `<button class="video" data-a="video" data-ex="${ex.id}">▶ Ver el vídeo del entrenador</button>`;
-    return `<div class="vid ${/shorts\//.test(ex.url) ? 'short' : ''}"><iframe src="https://www.youtube-nocookie.com/embed/${id}?autoplay=1&rel=0&playsinline=1"
+    const vs = vids(ex), k = vKey(ex), mine = (S.videos || {})[k], open = vs.find(v => view.video === ex.id + ':' + v.w);
+    const change = `<p class="vid-links"><button class="link" data-a="vidset" data-k="${k}">${mine ? 'Cambiar tu vídeo' : 'Poner otro vídeo'}</button>${mine ? ` · <button class="link" data-a="viddel" data-k="${k}">Quitar el tuyo</button>` : ''}</p>`;
+    if (!vs.length) return `<a class="video" target="_blank" rel="noopener" href="https://www.youtube.com/results?search_query=${encodeURIComponent((ex.video || ex.name) + ' técnica')}">▶ Buscar un vídeo en YouTube</a>${change}`;
+    if (!open) return `<div class="vbtns">${vs.map((v, i) => `<button class="video ${i ? 'alt' : ''}" data-a="video" data-ex="${ex.id}:${v.w}">▶ Ver ${v.label}</button>`).join('')}</div>${change}`;
+    const id = ytId(open.url);
+    return `<div class="vid ${/shorts\//.test(open.url) ? 'short' : ''}"><iframe src="https://www.youtube-nocookie.com/embed/${id}?autoplay=1&rel=0&playsinline=1"
         title="Vídeo: ${esc(ex.name)}" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen
         referrerpolicy="strict-origin-when-cross-origin"></iframe></div>
-      <p class="vid-links"><button class="link" data-a="video" data-ex="">Cerrar vídeo</button> · <a class="link" target="_blank" rel="noopener" href="${ex.url}">Abrir en YouTube</a></p>`;
+      <p class="vid-links"><button class="link" data-a="video" data-ex="">Cerrar vídeo</button> · <a class="link" target="_blank" rel="noopener" href="${esc(open.url)}">Abrir en YouTube</a>${vs.filter(v => v !== open).map(v => ` · <button class="link" data-a="video" data-ex="${ex.id}:${v.w}">Ver ${v.label}</button>`).join('')}</p>`;
   }
 
   /* ---------- variantes ---------- */
@@ -265,8 +277,8 @@
     const exs = b.ex.map(exV);
     return `<div class="sup" role="note"><p class="sup-h">Ahora viene: ${b.label} · ${exs.length} ejercicios alternados</p>
       <div class="sup-g">${exs.map((e, k) => {
-        const vid = e.vv && e.vv.id, src = PH[gearKey(e.id, vid)] || thumbOf(e.url), g = gearOf(e.id, vid);
-        return `<figure>${src ? `<img src="${src}" alt="" referrerpolicy="no-referrer">` : ''}<figcaption><b>${k + 1}. ${esc(e.name.replace(/\s*\(.*?\)/g, ''))}</b>${g ? `<span>🔧 ${esc(g)}</span>` : ''}</figcaption></figure>`;
+        const vid = e.vv && e.vv.id, im = imgOf(e), src = im.src, g = gearOf(e.id, vid);
+        return `<figure>${src ? `<img class="${im.doc ? 'doc' : ''}" src="${src}" alt="" referrerpolicy="no-referrer">` : ''}<figcaption><b>${k + 1}. ${esc(e.name.replace(/\s*\(.*?\)/g, ''))}</b>${g ? `<span>🔧 ${esc(g)}</span>` : ''}</figcaption></figure>`;
       }).join('')}</div>
       <p class="sup-t">${supPrep(b)} ${b.info || ''}</p></div>`;
   }
@@ -282,16 +294,23 @@
   let PH = (() => { try { return JSON.parse(localStorage.getItem(PKEY) || '{}'); } catch (e) { return {}; } })();
   const savePhotos = () => { try { localStorage.setItem(PKEY, JSON.stringify(PH)); return true; } catch (e) { return false; } };
   const thumbOf = url => { const id = ytId(url); return id ? 'https://i.ytimg.com/vi/' + id + '/hqdefault.jpg' : null; };
+  // la imagen del documento solo vale para el ejercicio base (una variante puede ser otra máquina)
+  const docImg = ex => ex.vv ? null : (P.images || {})[ex.id] || null;
+  function imgOf(ex) {
+    const own = PH[gearKey(ex.id, ex.vv && ex.vv.id)], doc = !own && docImg(ex);
+    const sh = (P.shorts || {})[vKey(ex)];
+    return { src: own || doc || thumbOf(ex.url || (sh && sh.url)), own: !!own, doc: !!doc };
+  }
   let photoKey = null;
   const phin = document.createElement('input');
   phin.type = 'file'; phin.accept = 'image/*'; phin.setAttribute('capture', 'environment'); phin.hidden = true; phin.id = 'phin';
   document.body.appendChild(phin);
   function machineImg(ex) {
-    const k = gearKey(ex.id, ex.vv && ex.vv.id), own = PH[k], src = own || thumbOf(ex.url);
+    const k = gearKey(ex.id, ex.vv && ex.vv.id), im = imgOf(ex), own = im.own, src = im.src;
     const canPhoto = EX(ex.id).sets.some(x => x.w != null);
     if (!src && !canPhoto) return '';
-    return `<figure class="mimg ${own ? 'own' : ''}">${src ? `<img src="${src}" alt="${own ? 'Tu foto de la máquina' : 'Imagen del vídeo del entrenador'}: ${esc(ex.name)}" referrerpolicy="no-referrer">` : ''}
-      <figcaption>${own ? 'Tu foto' : src ? 'Del vídeo del entrenador' : ''}${canPhoto ? `<span><button class="link" data-a="photo" data-k="${k}">📷 ${own ? 'Cambiar foto' : 'Poner mi foto de la máquina'}</button>${own ? `<button class="link" data-a="phdel" data-k="${k}">Quitar</button>` : ''}</span>` : ''}</figcaption></figure>`;
+    return `<figure class="mimg ${own ? 'own' : im.doc ? 'doc' : ''}">${src ? `<img src="${src}" alt="${own ? 'Tu foto de la máquina' : im.doc ? 'Dibujo del ejercicio del plan del entrenador' : 'Imagen del vídeo'}: ${esc(ex.name)}" referrerpolicy="no-referrer">` : ''}
+      <figcaption>${own ? 'Tu foto' : im.doc ? 'Del plan del entrenador' : src ? 'Del vídeo' : ''}${canPhoto ? `<span><button class="link" data-a="photo" data-k="${k}">📷 ${own ? 'Cambiar foto' : 'Poner mi foto de la máquina'}</button>${own ? `<button class="link" data-a="phdel" data-k="${k}">Quitar</button>` : ''}</span>` : ''}</figcaption></figure>`;
   }
   async function shrink(file) {
     const url = URL.createObjectURL(file);
@@ -946,7 +965,7 @@
       <div data-fig="${ex.fig}"></div>
       <p class="resp">${ex.resp}</p>
       ${step.info ? `<p class="callout">${step.info}</p>` : ''}
-      <details ${last && view.video !== ex.id ? '' : 'open'}><summary>Cómo se hace</summary>
+      <details ${last && !vidOpen(ex.id) ? '' : 'open'}><summary>Cómo se hace</summary>
         <ol class="how">${ex.how.map(x => `<li>${x}</li>`).join('')}</ol>
         ${ex.note ? `<p class="callout"><b>Ojo:</b> ${ex.note}</p>` : ''}
         <p class="muted">Músculos: ${ex.muscles}</p>
@@ -1260,6 +1279,13 @@
       view.sub = null; save(); say('Paramos aquí. Apunta cómo te has encontrado.'); render();
     },
     video: d => { view.video = d.ex || null; render(true); },
+    vidset: d => {
+      const u = prompt('Pega el enlace de YouTube del vídeo que prefieras para este ejercicio:', (S.videos || {})[d.k] || '');
+      if (u == null) return;
+      if (!ytId(u.trim())) { alert('Ese enlace no parece de un vídeo de YouTube.'); return; }
+      S.videos = S.videos || {}; S.videos[d.k] = u.trim(); view.video = null; save(); render(true);
+    },
+    viddel: d => { if (!confirm('¿Quitar tu vídeo? Volverá a salir el vídeo corto propuesto.')) return; delete S.videos[d.k]; view.video = null; save(); render(true); },
     gearedit: d => { view.gear = d.k; render(true); const i = document.getElementById('gearin'); if (i) i.focus(); },
     gearcancel: () => { view.gear = null; render(true); },
     photo: d => { photoKey = d.k; phin.value = ''; phin.click(); },

@@ -6,7 +6,7 @@ Publicada en https://w1ldogs.github.io/entreno/ (GitHub Pages desde la raíz de 
 
 ## Archivos
 
-- `plan.js` — el plan en claro (`window.PLAN`: ejercicios, series, pesos, descansos, variantes, estiramientos, días). **Nunca se sube** (está en `.gitignore`).
+- `plan.js` — el plan en claro (`window.PLAN`: ejercicios, series, pesos, descansos, variantes, estiramientos, días; `shorts`: vídeo corto por ejercicio o `ejercicio:variante`; `images`: dibujos del documento del entrenador en JPEG base64). **Nunca se sube** (está en `.gitignore`). Las imágenes son de terceros: solo viajan dentro del plan cifrado, nunca como archivos sueltos en el repositorio.
 - `plan.enc.json` — el plan cifrado (PBKDF2-SHA256 600 000 iteraciones + AES-256-GCM); es lo que se publica.
 - `tools/cifrar.js` — genera `plan.enc.json` desde `plan.js`. Reutiliza la sal y comprueba que la contraseña es la del plan publicado; `--nueva` para cambiarla.
 - `tools/descifrar.js` — recrea `plan.js` desde `plan.enc.json` (por ejemplo, en un ordenador nuevo tras clonar).
